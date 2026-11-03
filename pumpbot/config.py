@@ -25,6 +25,10 @@ def _int(name: str, default: int) -> int:
     return int(_env(name, str(default)))
 
 
+def _list(name: str, default: str) -> list[str]:
+    return [x.strip().lower() for x in _env(name, default).split(",") if x.strip()]
+
+
 def _bool(name: str, default: bool) -> bool:
     return _env(name, "true" if default else "false").lower() in {"1", "true", "yes", "on"}
 
@@ -32,6 +36,7 @@ def _bool(name: str, default: bool) -> bool:
 @dataclass
 class Config:
     # --- mode -------------------------------------------------------------
+    strategy: str = "scalp"  # "scalp" (watch new coins) or "copy" (follow top traders)
     dry_run: bool = True  # paper trading unless explicitly disabled
     paper_balance_sol: float = 5.0
 
@@ -89,6 +94,46 @@ class Config:
     paper_latency_sec: float = 1.5  # delay between decision and simulated fill
     paper_slippage_pct: float = 3.0  # extra price impact on every simulated fill
 
+    # --- scalp strategy: what makes a coin worth buying --------------------
+    scalp_min_age_sec: float = 20.0  # let launch bundles/snipes settle first
+    scalp_max_age_sec: float = 1800.0  # only trade coins younger than this
+    scalp_window_sec: float = 60.0  # activity is measured over this window
+    scalp_min_trades: int = 30  # "big amount of trades" in the window
+    scalp_min_unique_traders: int = 15
+    scalp_min_buy_ratio: float = 0.60  # share of SOL volume that is buying
+    scalp_min_net_inflow_sol: float = 2.0
+    scalp_max_pump_pct: float = 150.0  # skip if already up this much vs window low
+    scalp_min_score: float = 60.0  # 0-100 potential score needed to buy
+    scalp_min_market_cap_sol: float = 30.0
+    scalp_max_market_cap_sol: float = 350.0
+    # socials: must have at least one ("any") or all ("all") of these
+    required_socials: list[str] = field(default_factory=lambda: ["website", "twitter", "instagram"])
+    socials_mode: str = "any"
+    ipfs_gateways: list[str] = field(
+        default_factory=lambda: [
+            "https://ipfs.filebase.io/ipfs/{cid}",
+            "https://pump.mypinata.cloud/ipfs/{cid}",
+            "https://4everland.io/ipfs/{cid}",
+            "https://ipfs.io/ipfs/{cid}",
+        ]
+    )
+    # rug-pull protection
+    rug_max_dev_pct: float = 10.0  # creator's share of supply
+    rug_max_top10_pct: float = 35.0  # top-10 wallets' share of supply
+    rug_max_single_holder_pct: float = 8.0
+    rug_max_early_supply_pct: float = 25.0  # bought in the first 3s (bundled launch)
+    rug_min_trader_diversity: float = 0.25  # unique traders / trades (wash trading)
+    rug_max_creator_launches_per_hour: int = 3  # serial launchers
+    rug_dump_exit_pct: float = 3.0  # exit if one wallet sells this % of supply at once
+    # scalp exits / pacing
+    scalp_max_hold_sec: int = 180
+    scalp_fade_window_sec: float = 15.0
+    scalp_fade_sell_ratio: float = 0.65  # exit if sells are >= this share of recent volume
+    scalp_reentry_cooldown_sec: int = 60
+    scalp_max_entries_per_token: int = 3
+    scalp_max_open_positions: int = 5
+    scalp_eval_interval_sec: float = 2.0  # re-score each coin at most this often
+
     state_file: str = "state.json"
     log_level: str = "INFO"
 
@@ -106,7 +151,39 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         excl = {w.strip() for w in _env("EXCLUDE_WALLETS", "").split(",") if w.strip()}
+        d = cls()
         return cls(
+            strategy=_env("STRATEGY", "scalp").lower(),
+            scalp_min_age_sec=_float("SCALP_MIN_AGE_SEC", d.scalp_min_age_sec),
+            scalp_max_age_sec=_float("SCALP_MAX_AGE_SEC", d.scalp_max_age_sec),
+            scalp_window_sec=_float("SCALP_WINDOW_SEC", d.scalp_window_sec),
+            scalp_min_trades=_int("SCALP_MIN_TRADES", d.scalp_min_trades),
+            scalp_min_unique_traders=_int("SCALP_MIN_UNIQUE_TRADERS", d.scalp_min_unique_traders),
+            scalp_min_buy_ratio=_float("SCALP_MIN_BUY_RATIO", d.scalp_min_buy_ratio),
+            scalp_min_net_inflow_sol=_float("SCALP_MIN_NET_INFLOW_SOL", d.scalp_min_net_inflow_sol),
+            scalp_max_pump_pct=_float("SCALP_MAX_PUMP_PCT", d.scalp_max_pump_pct),
+            scalp_min_score=_float("SCALP_MIN_SCORE", d.scalp_min_score),
+            scalp_min_market_cap_sol=_float("SCALP_MIN_MARKET_CAP_SOL", d.scalp_min_market_cap_sol),
+            scalp_max_market_cap_sol=_float("SCALP_MAX_MARKET_CAP_SOL", d.scalp_max_market_cap_sol),
+            required_socials=_list("REQUIRED_SOCIALS", ",".join(d.required_socials)),
+            socials_mode=_env("SOCIALS_MODE", d.socials_mode).lower(),
+            ipfs_gateways=[g.strip() for g in _env("IPFS_GATEWAYS", ",".join(d.ipfs_gateways)).split(",") if g.strip()],
+            rug_max_dev_pct=_float("RUG_MAX_DEV_PCT", d.rug_max_dev_pct),
+            rug_max_top10_pct=_float("RUG_MAX_TOP10_PCT", d.rug_max_top10_pct),
+            rug_max_single_holder_pct=_float("RUG_MAX_SINGLE_HOLDER_PCT", d.rug_max_single_holder_pct),
+            rug_max_early_supply_pct=_float("RUG_MAX_EARLY_SUPPLY_PCT", d.rug_max_early_supply_pct),
+            rug_min_trader_diversity=_float("RUG_MIN_TRADER_DIVERSITY", d.rug_min_trader_diversity),
+            rug_max_creator_launches_per_hour=_int(
+                "RUG_MAX_CREATOR_LAUNCHES_PER_HOUR", d.rug_max_creator_launches_per_hour
+            ),
+            rug_dump_exit_pct=_float("RUG_DUMP_EXIT_PCT", d.rug_dump_exit_pct),
+            scalp_max_hold_sec=_int("SCALP_MAX_HOLD_SEC", d.scalp_max_hold_sec),
+            scalp_fade_window_sec=_float("SCALP_FADE_WINDOW_SEC", d.scalp_fade_window_sec),
+            scalp_fade_sell_ratio=_float("SCALP_FADE_SELL_RATIO", d.scalp_fade_sell_ratio),
+            scalp_reentry_cooldown_sec=_int("SCALP_REENTRY_COOLDOWN_SEC", d.scalp_reentry_cooldown_sec),
+            scalp_max_entries_per_token=_int("SCALP_MAX_ENTRIES_PER_TOKEN", d.scalp_max_entries_per_token),
+            scalp_max_open_positions=_int("SCALP_MAX_OPEN_POSITIONS", d.scalp_max_open_positions),
+            scalp_eval_interval_sec=_float("SCALP_EVAL_INTERVAL_SEC", d.scalp_eval_interval_sec),
             dry_run=_bool("DRY_RUN", True),
             paper_balance_sol=_float("PAPER_BALANCE_SOL", 5.0),
             ws_url=_env("WS_URL", cls.ws_url),
