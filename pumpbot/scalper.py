@@ -22,6 +22,7 @@ from typing import Any
 
 from .base import BaseBot
 from .config import Config
+from .market import MarketData
 from .potential import PotentialAnalyzer
 from .socials import SocialsChecker, extract_socials
 from .tokens import TokenState
@@ -34,7 +35,10 @@ def _reason_key(reason: str) -> str:
 
 
 class ScalperBot(BaseBot):
-    def __init__(self, cfg: Config, executor, feed=None, clock=time.time, socials: SocialsChecker | None = None):
+    def __init__(
+        self, cfg: Config, executor, feed=None, clock=time.time, socials: SocialsChecker | None = None,
+        market: MarketData | None = None,
+    ):
         pcfg = replace(
             cfg,
             max_hold_sec=cfg.scalp_max_hold_sec,
@@ -42,8 +46,12 @@ class ScalperBot(BaseBot):
             max_open_positions=cfg.scalp_max_open_positions,
         )
         super().__init__(cfg, executor, feed, clock, positions_cfg=pcfg)
-        self.analyzer = PotentialAnalyzer(cfg)
+        self._own_market = market is None
+        self.market = market or MarketData(cfg)
+        self.analyzer = PotentialAnalyzer(cfg, self.market)
         self.socials = socials or SocialsChecker(cfg.ipfs_gateways)
+        self._disc_version = 0
+        self._bg: set[str] = set()  # background jobs in flight (discovery / price)
         self.tokens: OrderedDict[str, TokenState] = OrderedDict()
         self.creator_launches: dict[str, deque] = {}
         self.bad_creators: dict[str, str] = {}
@@ -145,6 +153,8 @@ class ScalperBot(BaseBot):
         if a.rug and not t.flag:
             self._flag(t, a.rug, blacklist=a.rug.startswith("dev sold"))
         if not a.approved:
+            if t.partial and "rug risk: holders not checked yet" in a.reasons:
+                self._spawn(self.market.holders.check(t.mint, {t.pair} if t.pair else set(), now))
             self.skip_reasons[_reason_key(a.reasons[0])] += 1
             self.log.debug("skip %s", a.summary())
             return
@@ -154,17 +164,29 @@ class ScalperBot(BaseBot):
             self.counts["entries"] += 1
 
     # ---------------------------------------------------------- maintenance
+    def is_established(self, t: TokenState) -> bool:
+        return t.partial or self.analyzer.mcap_usd(t) >= self.cfg.discovery_min_mcap_usd
+
     async def _prune_tokens(self, now: float, force_cap: bool = False) -> None:
-        keep_after = now - self.cfg.scalp_max_age_sec - 300
-        drop = []
+        # new coins: watch for SCALP_MAX_AGE_SEC (at most 1h if a tactic only trades established coins)
+        keep_after = now - min(self.cfg.scalp_max_age_sec, 3600) - 300
+        drop, est_order = [], []
         for mint, t in self.tokens.items():
             if mint in self.positions.open or mint in self._busy:
                 continue
-            if t.created_at < keep_after:
+            if self.is_established(t):
+                # coins that made it: keep watching while they're still trading
+                if now - max(t.last_trade_at, t.created_at if not t.partial else 0, t.last_eval) > \
+                        self.cfg.established_idle_drop_sec and now - t.last_eval > 60:
+                    drop.append(mint)
+                else:
+                    est_order.append(mint)
+            elif t.created_at < keep_after:
                 drop.append(mint)
         over = len(self.tokens) - len(drop) - self.cfg.max_tracked_tokens
         if force_cap and over > 0:
-            for mint in self.tokens:  # oldest first
+            # make room with the oldest coins that never got going, then the oldest established ones
+            for mint in [m for m in self.tokens if m not in est_order] + est_order:
                 if over <= 0:
                     break
                 if mint not in drop and mint not in self.positions.open and mint not in self._busy:
@@ -175,14 +197,65 @@ class ScalperBot(BaseBot):
         if drop and self.feed:
             await self.feed.unsubscribe_tokens(drop)
 
+    def add_discovered(self, c: dict[str, Any], now: float) -> None:
+        """An established coin found on DexScreener (no launch history)."""
+        t = self.tokens.get(c["mint"])
+        if t is None:
+            t = TokenState(c["mint"], "", c.get("created_at") or now - 3600, c.get("name", ""), c.get("symbol", ""))
+            t.partial = True
+            t.socials = dict(c.get("socials") or {})
+            t.last_trade_at = now
+            if self.market.sol.usd > 0:
+                t.market_cap_sol = c.get("mcap_usd", 0) / self.market.sol.usd
+            self.tokens[c["mint"]] = t
+            self.counts["discovered"] += 1
+            if t.socials:
+                self.counts["with_socials"] += 1
+        elif not t.socials and c.get("socials"):
+            t.socials = dict(c["socials"])
+        t.pair = c.get("pair", t.pair)
+        t.discovered_mcap_usd = c.get("mcap_usd", 0)
+        t.last_eval = min(t.last_eval, now)
+
+    async def _background(self, key: str, coro) -> None:
+        try:
+            await coro
+        except Exception as e:  # pragma: no cover - network
+            self.log.debug("%s failed: %s", key, e)
+        finally:
+            self._bg.discard(key)
+
+    async def _market_step(self, now: float) -> None:
+        needs_usd = self.cfg.scalp_min_market_cap_usd > 0 or self.cfg.discovery_enabled
+        if needs_usd and "sol" not in self._bg:
+            self._bg.add("sol")
+            self._spawn(self._background("sol", self.market.sol.refresh(now)))
+        if not self.cfg.discovery_enabled:
+            return
+        if "disc" not in self._bg:
+            self._bg.add("disc")
+            self._spawn(self._background("disc", self.market.discovery.poll(now)))
+        if self.market.discovery.version != self._disc_version:
+            self._disc_version = self.market.discovery.version
+            new = [c["mint"] for c in self.market.discovery.items if c["mint"] not in self.tokens]
+            for c in self.market.discovery.items:
+                self.add_discovered(c, now)
+            if new and self.feed:
+                await self.feed.subscribe_tokens(new)
+            await self._prune_tokens(now, force_cap=True)
+
     async def tick(self) -> None:
         await super().tick()
-        await self._prune_tokens(self.clock())
+        now = self.clock()
+        await self._market_step(now)
+        await self._prune_tokens(now)
 
     def status_extra(self) -> str:
         top = ", ".join(f"{k} ×{v}" for k, v in self.skip_reasons.most_common(4))
         return (
-            f"coins={self.counts['coins']} watching={len(self.tokens)} with-socials={self.counts['with_socials']} "
+            f"coins={self.counts['coins']} discovered={self.counts['discovered']} watching={len(self.tokens)} "
+            f"established={sum(1 for t in self.tokens.values() if self.is_established(t))} "
+            f"with-socials={self.counts['with_socials']} "
             f"rug-flags={self.counts['rug_flags']} entries={self.counts['entries']} | top skips: {top}"
         )
 
@@ -195,3 +268,5 @@ class ScalperBot(BaseBot):
             await super().run()
         finally:
             await self.socials.close()
+            if self._own_market:
+                await self.market.close()

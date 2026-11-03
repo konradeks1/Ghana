@@ -34,8 +34,9 @@ class TradeEvent:
         try:
             sol = float(msg.get("solAmount") or 0.0)
             tokens = float(msg.get("tokenAmount") or msg.get("initialBuy") or 0.0)
-            v_sol = float(msg.get("vSolInBondingCurve") or 0.0)
-            v_tok = float(msg.get("vTokensInBondingCurve") or 0.0)
+            # bonding-curve coins report v*InBondingCurve; graduated (PumpSwap) coins *InPool
+            v_sol = float(msg.get("vSolInBondingCurve") or msg.get("solInPool") or 0.0)
+            v_tok = float(msg.get("vTokensInBondingCurve") or msg.get("tokensInPool") or 0.0)
             mcap = float(msg.get("marketCapSol") or 0.0)
         except (TypeError, ValueError):
             return None

@@ -50,14 +50,33 @@ def _scale(x: float, lo: float, hi: float) -> float:
 
 
 class PotentialAnalyzer:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, market=None):
         self.cfg = cfg
+        self.market = market  # MarketData: SOL price + RPC holder checks
+
+    def mcap_usd(self, t: TokenState) -> float:
+        if self.market is not None:
+            return self.market.sol.mcap_usd(t.market_cap_sol)
+        return t.market_cap_sol * self.cfg.sol_price_usd
 
     def rug_check(self, t: TokenState, now: float) -> tuple[str, str]:
         """(permanent_flag, temporary_reason). A permanent flag means never buy."""
         c = self.cfg
         if t.flag:
             return t.flag, ""
+        if t.partial:
+            # no launch history: use the RPC's top holders instead of our own ledger
+            res = self.market.holders.get(t.mint, now) if self.market is not None else None
+            if res is None:
+                return "", "holders not checked yet" if c.require_holder_check else ""
+            top10, mx, err = res
+            if err or top10 is None:
+                return "", ("holder check unavailable" if c.require_holder_check else "")
+            if top10 > c.rug_max_top10_pct:
+                return "", f"top-10 hold {top10:.0f}%"
+            if mx > c.rug_max_single_holder_pct:
+                return "", f"one wallet holds {mx:.1f}%"
+            return "", ""
         if t.dev_sold > 0:
             return f"dev sold {t.pct(t.dev_sold):.1f}% of supply", ""
         if t.early_supply_pct > c.rug_max_early_supply_pct:
@@ -79,7 +98,7 @@ class PotentialAnalyzer:
         w = t.window(now, c.scalp_window_sec)
         a.stats = (
             f"age={age:.0f}s trades={w.trades} traders={w.traders} buy={w.buy_ratio:.0%} "
-            f"net={w.net_inflow_sol:+.1f}SOL mcap={t.market_cap_sol:.0f}SOL"
+            f"net={w.net_inflow_sol:+.1f}SOL mcap={t.market_cap_sol:.0f}SOL (${self.mcap_usd(t) / 1000:.0f}k)"
         )
 
         # --- rug screening ---------------------------------------------------
@@ -103,7 +122,11 @@ class PotentialAnalyzer:
             a.reasons.append("too new")
         elif age > c.scalp_max_age_sec:
             a.reasons.append("too old")
-        if not (c.scalp_min_market_cap_sol <= t.market_cap_sol <= c.scalp_max_market_cap_sol):
+        if c.scalp_min_market_cap_usd > 0:
+            usd = self.mcap_usd(t)
+            if usd < c.scalp_min_market_cap_usd or (c.scalp_max_market_cap_usd and usd > c.scalp_max_market_cap_usd):
+                a.reasons.append("mcap outside band")
+        elif not (c.scalp_min_market_cap_sol <= t.market_cap_sol <= c.scalp_max_market_cap_sol):
             a.reasons.append("mcap outside band")
         pump = (t.last_price / w.low - 1) * 100 if w.low > 0 else 0.0
         if pump > c.scalp_max_pump_pct:
@@ -145,7 +168,7 @@ class PotentialAnalyzer:
         """Reasons to dump a held coin immediately, checked on every trade."""
         c = self.cfg
         if not evt_is_buy:
-            if evt_trader == t.creator:
+            if t.creator and evt_trader == t.creator:
                 return "dev is selling (rug risk)"
             if t.pct(evt_tokens) >= c.rug_dump_exit_pct:
                 return f"whale dumped {t.pct(evt_tokens):.1f}% of supply"

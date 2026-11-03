@@ -24,6 +24,7 @@ from dataclasses import replace
 
 from .config import Config
 from .executor import PaperExecutor
+from .market import MarketData
 from .mux import FeedMux
 from .scalper import ScalperBot
 from .socials import SocialsChecker
@@ -123,15 +124,16 @@ def table(rows: list[dict]) -> str:
     return "\n".join(out)
 
 
-def _build(mux, names, tactics, base, out_dir, socials, clock=time.time, sleep=asyncio.sleep):
+def _build(mux, names, tactics, base, out_dir, socials, clock=time.time, sleep=asyncio.sleep, market=None):
     for name in names:
         cfg = replace(base, **tactics[name], state_file=os.path.join(out_dir, f"{name}.state.json"))
-        bot = ScalperBot(cfg, PaperExecutor(cfg, sleep=sleep), feed=mux.proxy(), clock=clock, socials=socials)
+        bot = ScalperBot(cfg, PaperExecutor(cfg, sleep=sleep), feed=mux.proxy(), clock=clock, socials=socials,
+                         market=market)
         bot.log = logging.getLogger(f"pumpbot.{name}")
         mux.bots.append(bot)
 
 
-def _add_ensemble(mux, base, out_dir, clock=time.time, sleep=asyncio.sleep, socials=None, extra=None):
+def _add_ensemble(mux, base, out_dir, clock=time.time, sleep=asyncio.sleep, socials=None, extra=None, market=None):
     from .ensemble import EnsembleBot
 
     edir = os.path.join(out_dir, "ensemble")
@@ -140,7 +142,7 @@ def _add_ensemble(mux, base, out_dir, clock=time.time, sleep=asyncio.sleep, soci
         os.remove(os.path.join(edir, f))
     cfg = replace(base, ensemble_state_dir=edir, state_file=os.path.join(out_dir, "ENSEMBLE.state.json"))
     bot = EnsembleBot(cfg, PaperExecutor(cfg, sleep=sleep), feed=mux.proxy(), clock=clock, sleep=sleep,
-                      socials=socials, tactics={**TACTICS, **(extra or {})})
+                      socials=socials, tactics={**TACTICS, **(extra or {})}, market=market)
     bot.log = logging.getLogger("pumpbot.ENSEMBLE")
     mux.bots.append(bot)
     return bot
@@ -169,9 +171,10 @@ async def replay(
     clock = VirtualClock(events[0]["t"])
     mux = FeedMux(None)
     socials = RecordedSocials(meta)
-    _build(mux, names, tactics, base, out_dir, socials, clock=clock.time, sleep=clock.sleep)
+    market = MarketData(base, offline=True)
+    _build(mux, names, tactics, base, out_dir, socials, clock=clock.time, sleep=clock.sleep, market=market)
     if ensemble:
-        _add_ensemble(mux, base, out_dir, clock.time, clock.sleep, socials, extra)
+        _add_ensemble(mux, base, out_dir, clock.time, clock.sleep, socials, extra, market)
         names = names + ["ENSEMBLE"]
         tactics = {**tactics, "ENSEMBLE": {"strategy": "ensemble"}}
     next_tick = events[0]["t"] + 1
@@ -182,6 +185,9 @@ async def replay(
                 await b.tick()
             next_tick += 1
         await clock.advance(e["t"])
+        if "x" in e:
+            market.apply_record(e["x"], e["t"])
+            continue
         await mux.handle(e["m"])
     await clock.advance(events[-1]["t"] + 5)
     for b in mux.bots:
@@ -212,9 +218,10 @@ async def run(
     os.makedirs(out_dir, exist_ok=True)
     mux = FeedMux(base.ws_endpoint, record)
     socials = SocialsChecker(base.ipfs_gateways)
-    _build(mux, names, tactics, base, out_dir, socials)
+    market = MarketData(base, recorder=mux.record_extra if record else None)
+    _build(mux, names, tactics, base, out_dir, socials, market=market)
     if ensemble:
-        _add_ensemble(mux, base, out_dir, socials=socials, extra=extra)
+        _add_ensemble(mux, base, out_dir, socials=socials, extra=extra, market=market)
         names = names + ["ENSEMBLE"]
         tactics = {**tactics, "ENSEMBLE": {"strategy": "ensemble"}}
     log = logging.getLogger("pumpbot.experiment")
@@ -244,6 +251,7 @@ async def run(
             mux._rec.close()
             dump_metadata(socials, record + ".meta.json")
         await socials.close()
+        await market.close()
 
     results = [summarize(n, b, tactics[n]) for n, b in zip(names, mux.bots)]
     with open(os.path.join(out_dir, "results.json"), "w") as f:
@@ -255,7 +263,7 @@ async def run(
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--minutes", type=float, default=10)
-    ap.add_argument("--tactics", default=",".join(TACTICS))
+    ap.add_argument("--tactics", default="all", help="names, or groups: all / est / new")
     ap.add_argument("--extra", default="", help="JSON file with additional {name: overrides}")
     ap.add_argument("--out", default="experiments")
     ap.add_argument("--record", default="", help="append the live stream to this .jsonl file")
@@ -269,7 +277,9 @@ def main() -> None:
         with open(args.extra) as f:
             extra = json.load(f)
     tactics = {**TACTICS, **extra}
-    names = list(tactics) if args.tactics == "all" else [n.strip() for n in args.tactics.split(",") if n.strip()]
+    from .ensemble import resolve_tactics
+
+    names = resolve_tactics([n.strip() for n in args.tactics.split(",") if n.strip()], tactics)
     if args.replay:
         asyncio.run(replay(args.replay, names, args.out, extra, args.ensemble))
     else:

@@ -15,7 +15,7 @@ TACTICS = {
 
 
 def make(tmp_path, tactics=TACTICS, **kw):
-    c = cfg(tmp_path, ensemble_state_dir=str(tmp_path / "ens"), **kw)
+    c = cfg(tmp_path, ensemble_state_dir=str(tmp_path / "ens"), ensemble_tactics=["all"], **kw)
     now = [0.0]
     bot = EnsembleBot(c, PaperExecutor(c), feed=FakeFeed(), clock=lambda: now[0], socials=FakeSocials(GOOD_META),
                       tactics=tactics)

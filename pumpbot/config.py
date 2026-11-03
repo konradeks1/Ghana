@@ -144,8 +144,24 @@ class Config:
     scalp_dip_max_pct: float = 0.0  # ... but no more than this % from the recent high
     scalp_dip_window_sec: float = 180.0
 
+    # --- established coins ($25k+) -----------------------------------------
+    scalp_min_market_cap_usd: float = 0.0  # when set, replaces the SOL market-cap band
+    scalp_max_market_cap_usd: float = 0.0
+    sol_price_usd: float = 90.0  # fallback until the live SOL price is fetched
+    discovery_enabled: bool = False  # find established coins on DexScreener
+    discovery_interval_sec: float = 60.0
+    discovery_min_mcap_usd: float = 25_000.0
+    discovery_max_mcap_usd: float = 10_000_000.0
+    discovery_min_h1_volume_usd: float = 10_000.0
+    discovery_min_m5_txns: int = 20
+    discovery_min_liquidity_usd: float = 8_000.0
+    discovery_max_coins: int = 60
+    require_holder_check: bool = True  # coins found mid-life need an RPC holder check to be bought
+    holder_check_ttl_sec: float = 300.0
+    established_idle_drop_sec: float = 900.0  # stop watching an established coin after 15 min without trades
+
     # --- ensemble: all tactics run in the background, the best ones trade ---
-    ensemble_tactics: list[str] = field(default_factory=lambda: ["all"])
+    ensemble_tactics: list[str] = field(default_factory=lambda: ["est"])  # "est" = established-coin tactics
     ensemble_top_k: int = 4  # how many tactics may trade at once
     ensemble_window_min: float = 120.0  # rank on the last 2 hours of simulated trades
     ensemble_explore_bonus: float = 10.0  # % bonus that shrinks as a tactic proves itself
@@ -178,7 +194,21 @@ class Config:
             any_profit_arm_pct=_float("ANY_PROFIT_ARM_PCT", 3.0),
             any_profit_floor_pct=_float("ANY_PROFIT_FLOOR_PCT", 1.0),
             exit_cost_pct=_float("EXIT_COST_PCT", 1.5),
-            ensemble_tactics=_list("ENSEMBLE_TACTICS", "all"),
+            ensemble_tactics=_list("ENSEMBLE_TACTICS", "est"),
+            scalp_min_market_cap_usd=_float("SCALP_MIN_MARKET_CAP_USD", 0.0),
+            scalp_max_market_cap_usd=_float("SCALP_MAX_MARKET_CAP_USD", 0.0),
+            sol_price_usd=_float("SOL_PRICE_USD", 90.0),
+            discovery_enabled=_bool("DISCOVERY_ENABLED", False),
+            discovery_interval_sec=_float("DISCOVERY_INTERVAL_SEC", 60.0),
+            discovery_min_mcap_usd=_float("DISCOVERY_MIN_MCAP_USD", 25_000.0),
+            discovery_max_mcap_usd=_float("DISCOVERY_MAX_MCAP_USD", 10_000_000.0),
+            discovery_min_h1_volume_usd=_float("DISCOVERY_MIN_H1_VOLUME_USD", 10_000.0),
+            discovery_min_m5_txns=_int("DISCOVERY_MIN_M5_TXNS", 20),
+            discovery_min_liquidity_usd=_float("DISCOVERY_MIN_LIQUIDITY_USD", 8_000.0),
+            discovery_max_coins=_int("DISCOVERY_MAX_COINS", 60),
+            require_holder_check=_bool("REQUIRE_HOLDER_CHECK", True),
+            holder_check_ttl_sec=_float("HOLDER_CHECK_TTL_SEC", 300.0),
+            established_idle_drop_sec=_float("ESTABLISHED_IDLE_DROP_SEC", 900.0),
             ensemble_top_k=_int("ENSEMBLE_TOP_K", 4),
             ensemble_window_min=_float("ENSEMBLE_WINDOW_MIN", 120.0),
             ensemble_explore_bonus=_float("ENSEMBLE_EXPLORE_BONUS", 10.0),

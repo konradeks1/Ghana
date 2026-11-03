@@ -94,7 +94,7 @@ class BaseBot:
             return None
         self.prices[evt.mint] = evt.price
         try:
-            v_sol = float(msg.get("vSolInBondingCurve") or 0)
+            v_sol = float(msg.get("vSolInBondingCurve") or msg.get("solInPool") or 0)
             if v_sol > 0:
                 self.reserves[evt.mint] = v_sol
         except (TypeError, ValueError):

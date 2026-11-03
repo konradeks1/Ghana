@@ -111,3 +111,45 @@ TACTICS: dict[str, dict] = {
         scalp_max_hold_sec=240, scalp_fade_sell_ratio=0.85,
     ),
 }
+
+# ---------------------------------------------------------------------------
+# Established coins: only trade coins already worth $25k+ (the late bonding
+# curve and coins that graduated to PumpSwap). Coins come from two places:
+# coins the bot watched from launch that grew past $25k, and coins found on
+# DexScreener. Socials and rug checks still apply. Coins found mid-life need
+# an RPC holder check (REQUIRE_HOLDER_CHECK).
+_EST = dict(
+    discovery_enabled=True, scalp_min_market_cap_usd=25_000, scalp_max_market_cap_usd=10_000_000,
+    scalp_min_age_sec=60, scalp_max_age_sec=1e9, stop_loss_pct=8, scalp_max_hold_sec=300,
+    scalp_max_pump_pct=60, scalp_reentry_cooldown_sec=120, scalp_max_entries_per_token=5,
+    scalp_fade_sell_ratio=0.75,
+)
+
+TACTICS.update({
+    # steady demand: lots of trades, mostly buying, money flowing in
+    "est_momentum": dict(_EST, scalp_window_sec=60, scalp_min_trades=20, scalp_min_unique_traders=12,
+                         scalp_min_buy_ratio=0.6, scalp_min_net_inflow_sol=1.0, scalp_min_score=50),
+    # same entries, but no early sell when selling picks up; wider stop, longer hold
+    "est_runner": dict(_EST, scalp_window_sec=60, scalp_min_trades=20, scalp_min_unique_traders=12,
+                       scalp_min_buy_ratio=0.6, scalp_min_net_inflow_sol=1.0, scalp_min_score=50,
+                       scalp_fade_sell_ratio=1.01, stop_loss_pct=10, scalp_max_hold_sec=600, trailing_stop_pct=12),
+    # buy at a fresh high
+    "est_breakout": dict(_EST, scalp_require_new_high=True, scalp_window_sec=60, scalp_min_trades=15,
+                         scalp_min_unique_traders=10, scalp_min_buy_ratio=0.55, scalp_min_net_inflow_sol=0.5,
+                         scalp_min_score=40),
+    # buy an 8-25% pullback from the 5-minute high while trading stays busy
+    "est_dip": dict(_EST, scalp_dip_min_pct=8, scalp_dip_max_pct=25, scalp_dip_window_sec=300,
+                    scalp_min_trades=12, scalp_min_unique_traders=8, scalp_min_buy_ratio=0.5,
+                    scalp_min_net_inflow_sol=-2.0, scalp_min_score=30, stop_loss_pct=10),
+    # wherever trading is busiest
+    "est_volume": dict(_EST, scalp_window_sec=30, scalp_min_trades=25, scalp_min_unique_traders=12,
+                       scalp_min_buy_ratio=0.55, scalp_min_net_inflow_sol=0.0, scalp_min_score=0),
+    # buying builds up but price hasn't moved yet (<8%)
+    "est_calm": dict(_EST, scalp_window_sec=60, scalp_max_pump_pct=8, scalp_min_trades=15,
+                     scalp_min_unique_traders=10, scalp_min_buy_ratio=0.6, scalp_min_net_inflow_sol=0.5,
+                     scalp_min_score=30),
+    # the run-up to graduation: $25k-$42k, the last stretch of the bonding curve
+    "est_graduation": dict(_EST, scalp_max_market_cap_usd=42_000, scalp_window_sec=60, scalp_min_trades=15,
+                           scalp_min_unique_traders=10, scalp_min_buy_ratio=0.6, scalp_min_net_inflow_sol=1.0,
+                           scalp_min_score=40),
+})

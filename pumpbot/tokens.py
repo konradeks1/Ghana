@@ -66,10 +66,16 @@ class TokenState:
     flag: str = ""  # permanent rug flag: never buy this coin
     entries: int = 0
     last_eval: float = 0.0
+    # coins discovered mid-life (no launch history): holder data comes from the RPC
+    partial: bool = False
+    pair: str = ""
+    discovered_mcap_usd: float = 0.0
+    last_trade_at: float = 0.0
 
     def on_trade(self, evt: TradeEvent) -> None:
         self.trades.append((evt.timestamp, evt.is_buy, evt.sol_amount, evt.trader, evt.token_amount, evt.price))
         self.last_price = evt.price
+        self.last_trade_at = evt.timestamp
         if evt.market_cap_sol:
             self.market_cap_sol = evt.market_cap_sol
         delta = evt.token_amount if evt.is_buy else -evt.token_amount

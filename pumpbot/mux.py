@@ -49,6 +49,11 @@ class FeedMux:
         self.messages = 0
         self._rec = open(record_path, "a") if record_path else None
 
+    def record_extra(self, rec: dict) -> None:
+        """Market data (SOL price, discovery, holder checks) so replays are exact."""
+        if self._rec:
+            self._rec.write(json.dumps({"t": time.time(), "x": rec}) + "\n")
+
     def proxy(self) -> FeedProxy:
         p = FeedProxy(self)
         self.proxies.append(p)

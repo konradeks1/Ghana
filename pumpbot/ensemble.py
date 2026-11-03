@@ -35,6 +35,7 @@ from typing import Any
 from .base import BaseBot
 from .config import Config
 from .executor import PaperExecutor
+from .market import MarketData
 from .mux import FeedProxy, NullFeed
 from .scalper import ScalperBot
 from .socials import SocialsChecker
@@ -54,6 +55,22 @@ class _MasterMux:
         return self.master.feed or self._null
 
 
+def resolve_tactics(wanted: list[str], tactics: dict[str, dict]) -> list[str]:
+    """'all', 'est' (established-coin tactics), 'new' (new-coin tactics) or explicit names."""
+    names: list[str] = []
+    for w in wanted:
+        if w == "all":
+            picked = list(tactics)
+        elif w == "est":
+            picked = [n for n in tactics if n.startswith("est_")]
+        elif w == "new":
+            picked = [n for n in tactics if not n.startswith("est_")]
+        else:
+            picked = [w] if w in tactics else []
+        names += [n for n in picked if n not in names]
+    return names
+
+
 def tactic_score(pcts: list[float], bonus: float) -> float:
     n = len(pcts)
     return sum(pcts) / (n + 1) + bonus / math.sqrt(n + 1)
@@ -63,6 +80,7 @@ class EnsembleBot(BaseBot):
     def __init__(
         self, cfg: Config, executor, feed=None, clock=time.time, sleep=asyncio.sleep,
         socials: SocialsChecker | None = None, tactics: dict[str, dict] | None = None,
+        market: MarketData | None = None,
     ):
         # the real wallet follows the tactics' exits; its own rules are only safety nets
         mcfg = replace(
@@ -73,8 +91,10 @@ class EnsembleBot(BaseBot):
         )
         super().__init__(cfg, executor, feed, clock, positions_cfg=mcfg)
         self.socials = socials or SocialsChecker(cfg.ipfs_gateways)
+        self._own_market = market is None
+        self.market = market or MarketData(cfg)
         tactics = tactics or TACTICS
-        names = list(tactics) if "all" in cfg.ensemble_tactics else [n for n in cfg.ensemble_tactics if n in tactics]
+        names = resolve_tactics(cfg.ensemble_tactics, tactics)
         if not names:
             raise ValueError(f"ENSEMBLE_TACTICS matched nothing; choose from {', '.join(tactics)}")
         os.makedirs(cfg.ensemble_state_dir, exist_ok=True)
@@ -90,7 +110,8 @@ class EnsembleBot(BaseBot):
             )
             proxy = FeedProxy(self._mux)
             self._mux.proxies.append(proxy)
-            bot = ScalperBot(tcfg, PaperExecutor(tcfg, sleep=sleep), feed=proxy, clock=clock, socials=self.socials)
+            bot = ScalperBot(tcfg, PaperExecutor(tcfg, sleep=sleep), feed=proxy, clock=clock, socials=self.socials,
+                             market=self.market)
             bot.log = logging.getLogger(f"pumpbot.shadow.{name}")
             bot.log.setLevel(shadow_log_level)
             bot.enter_hooks.append(partial(self._on_tactic_buy, name))
@@ -218,3 +239,5 @@ class EnsembleBot(BaseBot):
                 await bot.drain()
                 bot.save_state()
             await self.socials.close()
+            if self._own_market:
+                await self.market.close()
