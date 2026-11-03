@@ -53,6 +53,7 @@ def cfg(tmp_path=None, **kw):
         paper_latency_sec=0,
         paper_slippage_pct=0,
         min_median_hold_sec=0,
+        any_profit_mode=False,  # these tests cover the classic +TP / floor rules
     )
     for k, v in kw.items():
         setattr(c, k, v)
@@ -428,3 +429,25 @@ def test_live_sell_reports_real_proceeds():
 
     fill = asyncio.run(_live_executor(rpc).sell("m", 5000.0, 2e-5))
     assert fill.ok and fill.sol == pytest.approx(0.118)
+
+
+# ------------------------------------------------------------ any-profit rule
+def test_any_profit_locks_small_net_gain_and_lets_it_run():
+    c = cfg(any_profit_mode=True, any_profit_arm_pct=3, any_profit_floor_pct=1, exit_cost_pct=1.5,
+            trailing_stop_pct=10, stop_loss_pct=10)
+    pm = PositionManager(c)
+    pm.add(Position("m", 1.0, 0.1, 100, opened_at=0))
+    assert pm.exit_reason("m", 1.04, 1) is None and not pm.open["m"].runner  # +4% gross = +2.5% net
+    assert pm.exit_reason("m", 1.05, 2) is None and pm.open["m"].runner  # +3.5% net: locked
+    assert pm.exit_reason("m", 1.30, 3) is None  # still running
+    r = pm.exit_reason("m", 1.16, 4)  # >10% below the 1.30 peak
+    assert r.startswith("runner trailing-stop")
+
+
+def test_any_profit_floor_keeps_trade_net_positive():
+    c = cfg(any_profit_mode=True, any_profit_arm_pct=3, any_profit_floor_pct=1, exit_cost_pct=1.5)
+    pm = PositionManager(c)
+    pm.add(Position("m", 1.0, 0.1, 100, opened_at=0))
+    pm.exit_reason("m", 1.05, 1)
+    assert pm.exit_reason("m", 1.03, 2) is None  # +1.5% net, above the +1% floor
+    assert pm.exit_reason("m", 1.024, 3).startswith("runner floor")  # +0.9% net

@@ -38,7 +38,9 @@ class PaperExecutor:
       whatever the market price is *then* (read from the live feed)
     * slippage limit: if price moved against us by more than ``slippage_pct``
       during that time, the order fails like a real one would
-    * price impact: every fill is ``paper_slippage_pct`` worse than market
+    * price impact: computed from the coin's bonding-curve liquidity (a 0.1
+      SOL buy into a curve holding 40 SOL moves the average fill ~0.25%),
+      plus ``paper_slippage_pct`` for other traders in the same block
     * fees: pump.fun fee on each side plus the priority fee
     """
 
@@ -46,7 +48,13 @@ class PaperExecutor:
         self.cfg = cfg
         self.balance_sol = cfg.paper_balance_sol
         self.price_fn = price_fn
+        self.reserve_fn: Callable[[str], float | None] | None = None
         self._sleep = sleep
+
+    def _impact_pct(self, mint: str, sol: float) -> float:
+        reserve = self.reserve_fn(mint) if self.reserve_fn else None
+        curve = sol / reserve * 100 if reserve and reserve > 0 else 1.0
+        return curve + self.cfg.paper_slippage_pct
 
     async def _market_price(self, mint: str, signal_price: float) -> float:
         if self.cfg.paper_latency_sec > 0:
@@ -59,7 +67,7 @@ class PaperExecutor:
         moved = (market / price - 1) * 100
         if moved > self.cfg.slippage_pct:
             return Fill(False, 0, 0, market, error=f"slippage exceeded: price +{moved:.1f}% during latency")
-        fill_price = market * (1 + self.cfg.paper_slippage_pct / 100)
+        fill_price = market * (1 + self._impact_pct(mint, sol) / 100)
         tokens = sol * (1 - self.cfg.fee_pct / 100) / fill_price
         cost = sol + self.cfg.priority_fee_sol
         self.balance_sol -= cost
@@ -70,7 +78,7 @@ class PaperExecutor:
         moved = (1 - market / price) * 100
         if moved > self.cfg.slippage_pct:
             return Fill(False, 0, tokens, market, error=f"slippage exceeded: price -{moved:.1f}% during latency")
-        fill_price = market * (1 - self.cfg.paper_slippage_pct / 100)
+        fill_price = market * (1 - self._impact_pct(mint, tokens * market) / 100)
         sol = tokens * fill_price * (1 - self.cfg.fee_pct / 100) - self.cfg.priority_fee_sol
         self.balance_sol += sol
         return Fill(True, sol, tokens, fill_price, "paper")

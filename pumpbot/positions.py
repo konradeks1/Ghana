@@ -74,6 +74,11 @@ class PositionManager:
     def exit_reason(self, mint: str, price: float, now: float) -> str | None:
         """Exit rules.
 
+        With ANY_PROFIT_MODE (default) the "TP" is any net gain: once a trade is
+        up ANY_PROFIT_ARM_PCT after estimated selling costs it is locked in, and
+        it never sells below ANY_PROFIT_FLOOR_PCT net. Otherwise TAKE_PROFIT_PCT
+        and TP_FLOOR_PCT (e.g. the old +20% rule) apply.
+
         Before +TP: stop loss and timeout apply.
         At +TP: by default the trade becomes a "runner". There is no cap on the
         upside; a trailing stop follows the peak and the exit never goes below
@@ -89,8 +94,15 @@ class PositionManager:
         pnl = pos.pnl_pct(pos.last_price)
         eps = 1e-9
 
+        if cfg.any_profit_mode:
+            # thresholds are NET gains: add the estimated cost of selling
+            tp_pct = cfg.any_profit_arm_pct + cfg.exit_cost_pct
+            floor_pct = cfg.any_profit_floor_pct + cfg.exit_cost_pct
+        else:
+            tp_pct, floor_pct = cfg.take_profit_pct, cfg.tp_floor_pct
+
         if not pos.runner:
-            if pnl >= cfg.take_profit_pct - eps:
+            if pnl >= tp_pct - eps:
                 if not cfg.let_winners_run:
                     return f"take-profit {pnl:+.1f}%"
                 pos.runner, pos.runner_since = True, now
@@ -104,7 +116,7 @@ class PositionManager:
         # runner: trail the peak, never give back below the profit floor
         peak_pnl = pos.pnl_pct(pos.peak_price)
         trail_stop = pos.peak_price * (1 - cfg.trailing_stop_pct / 100)
-        floor = pos.entry_price * (1 + cfg.tp_floor_pct / 100)
+        floor = pos.entry_price * (1 + floor_pct / 100)
         stop = max(trail_stop, floor)
         if pos.last_price <= stop * (1 + eps):
             kind = "floor" if floor >= trail_stop else "trailing-stop"

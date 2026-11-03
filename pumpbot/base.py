@@ -29,13 +29,18 @@ class BaseBot:
         self.clock = clock
         self.positions = PositionManager(positions_cfg or cfg)
         self.prices: dict[str, float] = {}
+        self.reserves: dict[str, float] = {}  # SOL in the bonding curve, for price impact
         self._seen_sigs: OrderedDict[str, None] = OrderedDict()
         self._busy: set[str] = set()  # mints with an order in flight
         self._buying: set[str] = set()
         self._exit_retry: dict[str, str] = {}  # mint -> reason, for failed sells
         self._tasks: set[asyncio.Task] = set()
+        # async callbacks: enter_hooks(bot, mint, price, probability, label), exit_hooks(bot, mint, reason)
+        self.enter_hooks: list = []
+        self.exit_hooks: list = []
         if hasattr(executor, "price_fn"):  # paper fills use the price *after* latency
             executor.price_fn = self.prices.get
+            executor.reserve_fn = self.reserves.get
 
     # ---------------------------------------------------------------- state
     def state_extra(self) -> dict[str, Any]:
@@ -88,6 +93,12 @@ class BaseBot:
         if evt is None or self._dup(evt.signature):
             return None
         self.prices[evt.mint] = evt.price
+        try:
+            v_sol = float(msg.get("vSolInBondingCurve") or 0)
+            if v_sol > 0:
+                self.reserves[evt.mint] = v_sol
+        except (TypeError, ValueError):
+            pass
         return evt
 
     async def _update_position(self, evt: TradeEvent) -> None:
@@ -129,6 +140,8 @@ class BaseBot:
         self._busy.add(mint)
         self._buying.add(mint)
         self._spawn(self._do_buy(mint, price_hint, leaders or [], probability, label))
+        for hook in self.enter_hooks:
+            await hook(self, mint, price_hint, probability, label)
         return True
 
     async def _do_buy(self, mint: str, price_hint: float, leaders: list[str], probability: float, label: str) -> None:
@@ -161,6 +174,8 @@ class BaseBot:
             return
         self._busy.add(mint)
         self._spawn(self._do_exit(mint, reason))
+        for hook in self.exit_hooks:
+            await hook(self, mint, reason)
 
     async def _do_exit(self, mint: str, reason: str) -> None:
         try:

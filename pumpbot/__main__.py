@@ -8,6 +8,7 @@ import os
 from dataclasses import replace
 
 from .bot import CopyTradeBot
+from .ensemble import EnsembleBot
 from .scalper import ScalperBot
 from .config import Config
 from .executor import make_executor
@@ -17,7 +18,7 @@ def main() -> None:
     cfg = Config.from_env()
     tactic = os.getenv("TACTIC", "").strip()
     if tactic:
-        from .experiment import TACTICS
+        from .tactics import TACTICS
 
         if tactic not in TACTICS:
             raise SystemExit(f"unknown TACTIC {tactic!r}; choose from: {', '.join(TACTICS)}")
@@ -29,7 +30,15 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     log = logging.getLogger("pumpbot")
     mode = "PAPER" if cfg.dry_run else "LIVE"
-    if cfg.strategy == "copy":
+    if cfg.strategy == "ensemble":
+        log.info(
+            "mode=%s strategy=ensemble  tactics=%s  top %d trade  any-profit=%s (lock +%.1f%%, floor +%.1f%% net)  "
+            "SL=-%.0f%%  slippage<=%.0f%%  size=%.3f SOL",
+            mode, ",".join(cfg.ensemble_tactics), cfg.ensemble_top_k, cfg.any_profit_mode,
+            cfg.any_profit_arm_pct, cfg.any_profit_floor_pct, cfg.stop_loss_pct, cfg.slippage_pct, cfg.buy_amount_sol,
+        )
+        bot = EnsembleBot(cfg, make_executor(cfg))
+    elif cfg.strategy == "copy":
         log.info(
             "mode=%s strategy=copy  follow top %d  TP=+%.0f%%  SL=-%.0f%%  size=%.3f SOL",
             mode, cfg.top_n_traders, cfg.take_profit_pct, cfg.stop_loss_pct, cfg.buy_amount_sol,

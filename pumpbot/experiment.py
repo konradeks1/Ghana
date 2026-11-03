@@ -24,174 +24,11 @@ from dataclasses import replace
 
 from .config import Config
 from .executor import PaperExecutor
-from .feed import PumpPortalFeed
+from .mux import FeedMux
 from .scalper import ScalperBot
 from .socials import SocialsChecker
+from .tactics import TACTICS
 
-# Each tactic is a set of overrides on top of the .env / default config.
-TACTICS: dict[str, dict] = {
-    # current defaults: strict activity gates, +20% runner, 3 min max hold
-    "baseline": {},
-    # many small, fast wins: looser gates, +10% target, tight stop, short hold
-    "quick_flip": dict(
-        scalp_min_trades=15, scalp_min_unique_traders=10, scalp_min_buy_ratio=0.55,
-        scalp_min_net_inflow_sol=1.0, scalp_min_score=45, scalp_min_market_cap_sol=20,
-        scalp_max_market_cap_sol=600, take_profit_pct=10, tp_floor_pct=10, trailing_stop_pct=5,
-        stop_loss_pct=8, scalp_max_hold_sec=90, scalp_fade_sell_ratio=0.75,
-    ),
-    # get in before the crowd: very young coins, short window, bigger target
-    "early_bird": dict(
-        scalp_min_age_sec=5, scalp_max_age_sec=120, scalp_window_sec=20, scalp_min_trades=10,
-        scalp_min_unique_traders=8, scalp_min_net_inflow_sol=1.0, scalp_min_score=45,
-        scalp_min_market_cap_sol=25, take_profit_pct=25, tp_floor_pct=25, stop_loss_pct=15,
-        scalp_max_hold_sec=120, scalp_fade_sell_ratio=0.8,
-    ),
-    # ride breakouts: only buy at a fresh high with accelerating trading
-    "breakout": dict(
-        scalp_require_new_high=True, scalp_min_trades=25, scalp_min_unique_traders=12,
-        scalp_max_pump_pct=300, scalp_min_score=55, take_profit_pct=15, tp_floor_pct=15,
-        trailing_stop_pct=7, stop_loss_pct=10, scalp_max_hold_sec=150, scalp_fade_sell_ratio=0.75,
-    ),
-    # buy the dip: busy coin that pulled back 15-40% from its 3 min high
-    "dip_buyer": dict(
-        scalp_dip_min_pct=15, scalp_dip_max_pct=40, scalp_min_trades=20, scalp_min_unique_traders=10,
-        scalp_min_buy_ratio=0.50, scalp_min_net_inflow_sol=0.0, scalp_min_score=40,
-        take_profit_pct=15, tp_floor_pct=15, trailing_stop_pct=6, stop_loss_pct=12,
-        scalp_max_hold_sec=180, scalp_fade_sell_ratio=0.8,
-    ),
-    # bigger, more established coins near the top of the bonding curve
-    "king_of_hill": dict(
-        scalp_min_market_cap_sol=150, scalp_max_market_cap_sol=1000, scalp_max_age_sec=3600,
-        scalp_min_trades=40, scalp_min_unique_traders=20, scalp_min_net_inflow_sol=3.0,
-        take_profit_pct=12, tp_floor_pct=12, trailing_stop_pct=6, stop_loss_pct=8,
-        scalp_max_hold_sec=240, scalp_fade_sell_ratio=0.75,
-    ),
-    # let the momentum-fade exit breathe: same entries as baseline, exits only on TP/SL/time
-    "diamond_hands": dict(
-        scalp_fade_sell_ratio=1.01, stop_loss_pct=15, scalp_max_hold_sec=300,
-        trailing_stop_pct=12,
-    ),
-    # ---- round 2: looser gates (round 1 found almost nothing to buy) ----
-    "quick_flip_loose": dict(
-        scalp_window_sec=30, scalp_min_trades=8, scalp_min_unique_traders=6, scalp_min_buy_ratio=0.55,
-        scalp_min_net_inflow_sol=0.5, scalp_min_score=35, scalp_min_market_cap_sol=15,
-        scalp_max_market_cap_sol=800, take_profit_pct=8, tp_floor_pct=8, trailing_stop_pct=4,
-        stop_loss_pct=7, scalp_max_hold_sec=60, scalp_fade_sell_ratio=0.8,
-    ),
-    "early_bird_loose": dict(
-        scalp_min_age_sec=3, scalp_max_age_sec=90, scalp_window_sec=15, scalp_min_trades=6,
-        scalp_min_unique_traders=5, scalp_min_net_inflow_sol=0.3, scalp_min_score=30,
-        scalp_min_market_cap_sol=15, take_profit_pct=20, tp_floor_pct=20, stop_loss_pct=12,
-        scalp_max_hold_sec=90, scalp_fade_sell_ratio=0.85,
-    ),
-    "dip_buyer_loose": dict(
-        scalp_dip_min_pct=10, scalp_dip_max_pct=45, scalp_min_trades=10, scalp_min_unique_traders=6,
-        scalp_min_buy_ratio=0.45, scalp_min_net_inflow_sol=-1.0, scalp_min_score=30,
-        scalp_min_market_cap_sol=15, scalp_max_market_cap_sol=800,
-        take_profit_pct=12, tp_floor_pct=12, trailing_stop_pct=5, stop_loss_pct=10,
-        scalp_max_hold_sec=180, scalp_fade_sell_ratio=0.85,
-    ),
-    # dip entries but let winners run longer
-    "dip_runner": dict(
-        scalp_dip_min_pct=10, scalp_dip_max_pct=45, scalp_min_trades=10, scalp_min_unique_traders=6,
-        scalp_min_buy_ratio=0.45, scalp_min_net_inflow_sol=-1.0, scalp_min_score=30,
-        scalp_min_market_cap_sol=15, scalp_max_market_cap_sol=800,
-        take_profit_pct=20, tp_floor_pct=15, trailing_stop_pct=10, stop_loss_pct=12,
-        scalp_max_hold_sec=300, scalp_fade_sell_ratio=1.01,
-    ),
-    # baseline logic with half the activity requirement
-    "momentum_lite": dict(
-        scalp_min_trades=15, scalp_min_unique_traders=10, scalp_min_net_inflow_sol=1.0,
-        scalp_min_score=50, scalp_min_market_cap_sol=20, scalp_max_market_cap_sol=600,
-        take_profit_pct=15, tp_floor_pct=15, trailing_stop_pct=7, stop_loss_pct=10,
-    ),
-    # pure trade-count hunter: buy wherever trading is busiest, take +10% fast
-    "volume_hunter": dict(
-        scalp_window_sec=30, scalp_min_trades=20, scalp_min_unique_traders=10, scalp_min_buy_ratio=0.5,
-        scalp_min_net_inflow_sol=0.0, scalp_min_score=0, scalp_min_market_cap_sol=15,
-        scalp_max_market_cap_sol=1000, take_profit_pct=10, tp_floor_pct=10, trailing_stop_pct=5,
-        stop_loss_pct=8, scalp_max_hold_sec=120, scalp_fade_sell_ratio=0.8,
-    ),
-    # ---- round 3: buy accumulation BEFORE the spike (round 2 bought after +20-95% run-ups) ----
-    "calm_accumulation": dict(
-        scalp_window_sec=30, scalp_max_pump_pct=15, scalp_min_trades=10, scalp_min_unique_traders=6,
-        scalp_min_buy_ratio=0.6, scalp_min_net_inflow_sol=0.5, scalp_min_score=30,
-        scalp_min_market_cap_sol=15, scalp_max_market_cap_sol=800,
-        take_profit_pct=12, tp_floor_pct=12, trailing_stop_pct=5, stop_loss_pct=10,
-        scalp_max_hold_sec=180, scalp_fade_sell_ratio=0.85,
-    ),
-    "calm_runner": dict(
-        scalp_window_sec=30, scalp_max_pump_pct=15, scalp_min_trades=10, scalp_min_unique_traders=6,
-        scalp_min_buy_ratio=0.6, scalp_min_net_inflow_sol=0.5, scalp_min_score=30,
-        scalp_min_market_cap_sol=15, scalp_max_market_cap_sol=800,
-        take_profit_pct=20, tp_floor_pct=15, trailing_stop_pct=10, stop_loss_pct=12,
-        scalp_max_hold_sec=300, scalp_fade_sell_ratio=1.01,
-    ),
-    "calm_strict": dict(
-        scalp_window_sec=60, scalp_max_pump_pct=10, scalp_min_trades=20, scalp_min_unique_traders=12,
-        scalp_min_buy_ratio=0.65, scalp_min_net_inflow_sol=1.0, scalp_min_score=40,
-        scalp_min_market_cap_sol=20, scalp_max_market_cap_sol=600,
-        take_profit_pct=15, tp_floor_pct=15, trailing_stop_pct=7, stop_loss_pct=10,
-        scalp_max_hold_sec=240, scalp_fade_sell_ratio=0.85,
-    ),
-}
-
-
-class FeedProxy:
-    """Per-tactic view of the shared feed; ref-counts token subscriptions."""
-
-    def __init__(self, mux: "FeedMux"):
-        self.mux = mux
-        self.tokens: set[str] = set()
-
-    async def subscribe_tokens(self, mints):
-        new = set(mints) - self.tokens
-        self.tokens |= new
-        await self.mux.feed.subscribe_tokens(new)
-
-    async def unsubscribe_tokens(self, mints):
-        gone = set(mints) & self.tokens
-        self.tokens -= gone
-        still = set().union(*(p.tokens for p in self.mux.proxies))
-        await self.mux.feed.unsubscribe_tokens(gone - still)
-
-    async def set_accounts(self, wallets):
-        pass
-
-
-class NullFeed:
-    def __init__(self):
-        self.tokens: set[str] = set()
-
-    async def subscribe_tokens(self, m):
-        pass
-
-    async def unsubscribe_tokens(self, m):
-        pass
-
-
-class FeedMux:
-    def __init__(self, url: str | None, record_path: str | None = None):
-        self.bots: list[ScalperBot] = []
-        self.proxies: list[FeedProxy] = []
-        self.feed = PumpPortalFeed(url, self.handle) if url else NullFeed()
-        self.messages = 0
-        self._rec = open(record_path, "a") if record_path else None
-
-    def proxy(self) -> FeedProxy:
-        p = FeedProxy(self)
-        self.proxies.append(p)
-        return p
-
-    async def handle(self, msg: dict) -> None:
-        self.messages += 1
-        if self._rec:
-            self._rec.write(json.dumps({"t": time.time(), "m": msg}) + "\n")
-        for b in self.bots:
-            try:
-                await b.handle(msg)
-            except Exception:
-                b.log.exception("handler error")
 
 
 class VirtualClock:
@@ -262,9 +99,9 @@ def summarize(name: str, bot: ScalperBot, overrides: dict) -> dict:
         "best_pct": max(pcts) if pcts else 0.0,
         "worst_pct": min(pcts) if pcts else 0.0,
         "exit_reasons": dict(reasons),
-        "coins_seen": bot.counts["coins"],
-        "with_socials": bot.counts["with_socials"],
-        "rug_flags": bot.counts["rug_flags"],
+        "coins_seen": getattr(bot, "counts", Counter())["coins"],
+        "with_socials": getattr(bot, "counts", Counter())["with_socials"],
+        "rug_flags": getattr(bot, "counts", Counter())["rug_flags"],
         "overrides": overrides,
         "trade_log": [
             {"mint": t.mint, "pnl_sol": round(t.pnl_sol, 5), "pct": round(t.pnl_sol / t.sol_in * 100, 2),
@@ -294,12 +131,29 @@ def _build(mux, names, tactics, base, out_dir, socials, clock=time.time, sleep=a
         mux.bots.append(bot)
 
 
+def _add_ensemble(mux, base, out_dir, clock=time.time, sleep=asyncio.sleep, socials=None, extra=None):
+    from .ensemble import EnsembleBot
+
+    edir = os.path.join(out_dir, "ensemble")
+    os.makedirs(edir, exist_ok=True)
+    for f in os.listdir(edir):
+        os.remove(os.path.join(edir, f))
+    cfg = replace(base, ensemble_state_dir=edir, state_file=os.path.join(out_dir, "ENSEMBLE.state.json"))
+    bot = EnsembleBot(cfg, PaperExecutor(cfg, sleep=sleep), feed=mux.proxy(), clock=clock, sleep=sleep,
+                      socials=socials, tactics={**TACTICS, **(extra or {})})
+    bot.log = logging.getLogger("pumpbot.ENSEMBLE")
+    mux.bots.append(bot)
+    return bot
+
+
 def _base_config() -> Config:
     base = Config.from_env()
     return replace(base, dry_run=True, max_daily_loss_sol=1e9)  # paper only; let every tactic trade
 
 
-async def replay(path: str, names: list[str], out_dir: str, extra: dict[str, dict] | None = None) -> list[dict]:
+async def replay(
+    path: str, names: list[str], out_dir: str, extra: dict[str, dict] | None = None, ensemble: bool = False
+) -> list[dict]:
     """Re-run tactics on a recorded stream, at full speed, with the same latency rules."""
     base = _base_config()
     tactics = {**TACTICS, **(extra or {})}
@@ -314,7 +168,12 @@ async def replay(path: str, names: list[str], out_dir: str, extra: dict[str, dic
     events.sort(key=lambda e: e["t"])
     clock = VirtualClock(events[0]["t"])
     mux = FeedMux(None)
-    _build(mux, names, tactics, base, out_dir, RecordedSocials(meta), clock=clock.time, sleep=clock.sleep)
+    socials = RecordedSocials(meta)
+    _build(mux, names, tactics, base, out_dir, socials, clock=clock.time, sleep=clock.sleep)
+    if ensemble:
+        _add_ensemble(mux, base, out_dir, clock.time, clock.sleep, socials, extra)
+        names = names + ["ENSEMBLE"]
+        tactics = {**tactics, "ENSEMBLE": {"strategy": "ensemble"}}
     next_tick = events[0]["t"] + 1
     for e in events:
         while next_tick <= e["t"]:
@@ -328,7 +187,9 @@ async def replay(path: str, names: list[str], out_dir: str, extra: dict[str, dic
     for b in mux.bots:
         for mint in list(b.positions.open):
             await b._exit(mint, "end of test")
-    while any(b._tasks for b in mux.bots):
+    while any(b._tasks for b in mux.bots) or any(
+        s._tasks for b in mux.bots for s in getattr(b, "shadows", {}).values()
+    ):
         await clock.advance(clock.now + 1)
     for b in mux.bots:
         b.save_state()
@@ -343,7 +204,8 @@ async def replay(path: str, names: list[str], out_dir: str, extra: dict[str, dic
 
 
 async def run(
-    minutes: float, names: list[str], out_dir: str, extra: dict[str, dict] | None = None, record: str | None = None
+    minutes: float, names: list[str], out_dir: str, extra: dict[str, dict] | None = None, record: str | None = None,
+    ensemble: bool = False,
 ) -> list[dict]:
     base = _base_config()
     tactics = {**TACTICS, **(extra or {})}
@@ -351,6 +213,10 @@ async def run(
     mux = FeedMux(base.ws_endpoint, record)
     socials = SocialsChecker(base.ipfs_gateways)
     _build(mux, names, tactics, base, out_dir, socials)
+    if ensemble:
+        _add_ensemble(mux, base, out_dir, socials=socials, extra=extra)
+        names = names + ["ENSEMBLE"]
+        tactics = {**tactics, "ENSEMBLE": {"strategy": "ensemble"}}
     log = logging.getLogger("pumpbot.experiment")
     log.info("running %d tactics for %.0f min: %s", len(names), minutes, ", ".join(names))
 
@@ -394,6 +260,7 @@ def main() -> None:
     ap.add_argument("--out", default="experiments")
     ap.add_argument("--record", default="", help="append the live stream to this .jsonl file")
     ap.add_argument("--replay", default="", help="replay a recorded .jsonl instead of going live")
+    ap.add_argument("--ensemble", action="store_true", help="also run the ensemble (all tactics, best ones trade)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)-22s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -404,9 +271,9 @@ def main() -> None:
     tactics = {**TACTICS, **extra}
     names = list(tactics) if args.tactics == "all" else [n.strip() for n in args.tactics.split(",") if n.strip()]
     if args.replay:
-        asyncio.run(replay(args.replay, names, args.out, extra))
+        asyncio.run(replay(args.replay, names, args.out, extra, args.ensemble))
     else:
-        asyncio.run(run(args.minutes, names, args.out, extra, args.record or None))
+        asyncio.run(run(args.minutes, names, args.out, extra, args.record or None, args.ensemble))
 
 
 if __name__ == "__main__":

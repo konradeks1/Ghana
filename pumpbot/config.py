@@ -36,7 +36,7 @@ def _bool(name: str, default: bool) -> bool:
 @dataclass
 class Config:
     # --- mode -------------------------------------------------------------
-    strategy: str = "scalp"  # "scalp" (watch new coins) or "copy" (follow top traders)
+    strategy: str = "ensemble"  # "ensemble" (all tactics, best ones trade), "scalp" or "copy"
     dry_run: bool = True  # paper trading unless explicitly disabled
     paper_balance_sol: float = 5.0
 
@@ -67,6 +67,11 @@ class Config:
     trailing_stop_pct: float = 10.0  # sell when price drops this far from its peak
     tp_floor_pct: float = 20.0  # ...but never exit a runner below this gain
     runner_max_hold_sec: int = 3600
+    # any-profit rule: bank ANY net gain instead of waiting for +20%
+    any_profit_mode: bool = True
+    any_profit_arm_pct: float = 3.0  # net gain (after estimated exit costs) that locks the trade in
+    any_profit_floor_pct: float = 1.0  # a locked trade never sells below this net gain
+    exit_cost_pct: float = 1.5  # estimated sell fee + slippage, used to compute net gain
 
     # --- entry analysis -----------------------------------------------------
     min_win_prob: float = 0.55
@@ -84,7 +89,7 @@ class Config:
     max_open_positions: int = 3
     max_daily_loss_sol: float = 0.5
     mint_cooldown_sec: int = 1800
-    slippage_pct: float = 10.0
+    slippage_pct: float = 5.0  # max price move tolerated on a fill (was 10)
     priority_fee_sol: float = 0.0005
     fee_pct: float = 1.0  # pump.fun fee per side
     pool: str = "auto"
@@ -92,7 +97,7 @@ class Config:
 
     # --- paper realism ------------------------------------------------------
     paper_latency_sec: float = 1.5  # delay between decision and simulated fill
-    paper_slippage_pct: float = 3.0  # extra price impact on every simulated fill
+    paper_slippage_pct: float = 0.5  # extra slippage on top of the bonding-curve price impact
 
     # --- scalp strategy: what makes a coin worth buying --------------------
     scalp_min_age_sec: float = 20.0  # let launch bundles/snipes settle first
@@ -139,6 +144,16 @@ class Config:
     scalp_dip_max_pct: float = 0.0  # ... but no more than this % from the recent high
     scalp_dip_window_sec: float = 180.0
 
+    # --- ensemble: all tactics run in the background, the best ones trade ---
+    ensemble_tactics: list[str] = field(default_factory=lambda: ["all"])
+    ensemble_top_k: int = 4  # how many tactics may trade at once
+    ensemble_window_min: float = 120.0  # rank on the last 2 hours of simulated trades
+    ensemble_explore_bonus: float = 10.0  # % bonus that shrinks as a tactic proves itself
+    ensemble_min_score: float = 0.0  # tactics scoring at or below this don't trade
+    ensemble_max_open_positions: int = 6
+    ensemble_safety_max_hold_sec: int = 900
+    ensemble_state_dir: str = "ensemble_state"
+
     state_file: str = "state.json"
     log_level: str = "INFO"
 
@@ -158,7 +173,19 @@ class Config:
         excl = {w.strip() for w in _env("EXCLUDE_WALLETS", "").split(",") if w.strip()}
         d = cls()
         return cls(
-            strategy=_env("STRATEGY", "scalp").lower(),
+            strategy=_env("STRATEGY", "ensemble").lower(),
+            any_profit_mode=_bool("ANY_PROFIT_MODE", True),
+            any_profit_arm_pct=_float("ANY_PROFIT_ARM_PCT", 3.0),
+            any_profit_floor_pct=_float("ANY_PROFIT_FLOOR_PCT", 1.0),
+            exit_cost_pct=_float("EXIT_COST_PCT", 1.5),
+            ensemble_tactics=_list("ENSEMBLE_TACTICS", "all"),
+            ensemble_top_k=_int("ENSEMBLE_TOP_K", 4),
+            ensemble_window_min=_float("ENSEMBLE_WINDOW_MIN", 120.0),
+            ensemble_explore_bonus=_float("ENSEMBLE_EXPLORE_BONUS", 10.0),
+            ensemble_min_score=_float("ENSEMBLE_MIN_SCORE", 0.0),
+            ensemble_max_open_positions=_int("ENSEMBLE_MAX_OPEN_POSITIONS", 6),
+            ensemble_safety_max_hold_sec=_int("ENSEMBLE_SAFETY_MAX_HOLD_SEC", 900),
+            ensemble_state_dir=_env("ENSEMBLE_STATE_DIR", "ensemble_state"),
             scalp_min_age_sec=_float("SCALP_MIN_AGE_SEC", d.scalp_min_age_sec),
             scalp_max_age_sec=_float("SCALP_MAX_AGE_SEC", d.scalp_max_age_sec),
             scalp_window_sec=_float("SCALP_WINDOW_SEC", d.scalp_window_sec),
@@ -229,13 +256,13 @@ class Config:
             max_open_positions=_int("MAX_OPEN_POSITIONS", 3),
             max_daily_loss_sol=_float("MAX_DAILY_LOSS_SOL", 0.5),
             mint_cooldown_sec=_int("MINT_COOLDOWN_SEC", 1800),
-            slippage_pct=_float("SLIPPAGE_PCT", 10.0),
+            slippage_pct=_float("SLIPPAGE_PCT", 5.0),
             priority_fee_sol=_float("PRIORITY_FEE_SOL", 0.0005),
             fee_pct=_float("FEE_PCT", 1.0),
             pool=_env("POOL", "auto"),
             confirm_timeout_sec=_float("CONFIRM_TIMEOUT_SEC", 45.0),
             paper_latency_sec=_float("PAPER_LATENCY_SEC", 1.5),
-            paper_slippage_pct=_float("PAPER_SLIPPAGE_PCT", 3.0),
+            paper_slippage_pct=_float("PAPER_SLIPPAGE_PCT", 0.5),
             state_file=_env("STATE_FILE", "state.json"),
             log_level=_env("LOG_LEVEL", "INFO"),
         )

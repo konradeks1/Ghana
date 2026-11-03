@@ -7,8 +7,48 @@ trading activity. It scalps the strongest coins, the ones with **lots of
 trades** from many real wallets, and it does this as often as the risk limits
 allow.
 
-The previous strategy, copying the top traders, is still available with
-`STRATEGY=copy` (see [Copy strategy](#copy-strategy-strategycopy)).
+**Default: the ensemble (`STRATEGY=ensemble`).** All 16 tactics in
+`pumpbot/tactics.py` run together. Each one trades on its own simulated wallet
+in the background, and the **real wallet follows the buys of the tactics that
+are making the most money right now** (see [Ensemble](#ensemble-all-tactics-together)).
+To run one tactic on its own, use `STRATEGY=scalp TACTIC=<name>`. Copy trading
+is still available with `STRATEGY=copy`.
+
+## Ensemble: all tactics together
+
+- **Background tactics:** every tactic watches every new coin and trades on its
+  own simulated wallet (`ensemble_state/`), whether or not it's ranked. So the
+  ranking is always based on fresh results.
+- **Ranking:** every minute each tactic gets a score from its last 2 hours of
+  results:
+  `score = sum of net % results / (trades + 1) + 10 / sqrt(trades + 1)`
+  - **Winners trade:** tactics that keep winning rise to the top.
+  - **Losers drop out:** tactics that keep losing fall below 0 and stop trading.
+  - **New tactics get a chance:** a tactic with few trades gets a small bonus
+    that shrinks as evidence comes in.
+- **Following:** the real wallet copies the buys of the top `ENSEMBLE_TOP_K` (4)
+  at the same moment they decide. Each position then follows the exits of the
+  tactic that bought it. One coin is held by one tactic at a time.
+- **Safety nets:**
+  - if the tactic's own simulated buy failed, the real position is closed;
+  - nothing is held longer than 15 minutes.
+
+## Exits: the any-profit rule
+
+By default the bot doesn't wait for +20%. A trade is **locked in as soon as
+it's up +3% net** (after the estimated sell fee and slippage). Once locked, it
+**never sells below +1% net**, and it keeps running with a trailing stop while
+the price climbs. Set `ANY_PROFIT_MODE=false` to go back to a fixed target
+(`TAKE_PROFIT_PCT`, `TP_FLOOR_PCT`).
+
+## Slippage
+
+- **Live:** fills accept at most a 5% price move (`SLIPPAGE_PCT`, was 10%). That
+  gives better prices but more missed fills in fast pumps.
+- **Paper:** price impact is calculated from the coin's actual bonding-curve
+  liquidity. A 0.1 SOL buy into a curve holding 40 SOL costs about 0.25%. On
+  top of that comes 0.5% for other traders in the same block (it used to be a
+  flat 3%).
 
 > ⚠️ **Risk warning.** Meme coins are extremely volatile; most lose nearly all
 > their value within hours. Rug checks reduce the risk but can't remove it.
