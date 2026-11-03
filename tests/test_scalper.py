@@ -318,3 +318,48 @@ def test_low_activity_not_bought(tmp_path):
 def test_supply_constant():
     assert TOTAL_SUPPLY == 1e9
     assert PotentialAnalyzer(cfg())  # constructs
+
+
+# ------------------------------------------------------------ entry styles
+def test_breakout_requires_new_high(tmp_path):
+    from pumpbot.models import TradeEvent
+
+    c = cfg(tmp_path, scalp_require_new_high=True)
+    an = PotentialAnalyzer(c)
+    t = _token()
+    t.socials = {"twitter": "x.com/good"}
+    price = 3e-8
+    for i in range(40):
+        price *= 1.005
+        side = "sell" if i % 6 == 5 else "buy"
+        t.on_trade(TradeEvent.from_pumpportal(msg(f"w{i % 25}", "MINT", side, 0.4, 1_000_000, price, f"x{i}"), now=25 + i * 0.8))
+    assert an.assess(t, 57.0).approved  # rising: at the high -> breakout entry ok
+    t.on_trade(TradeEvent.from_pumpportal(msg("w99", "MINT", "buy", 0.4, 1_000_000, price * 0.9, "lo"), now=57.5))
+    a = an.assess(t, 57.5)
+    assert not a.approved and "not at a new high" in a.reasons
+
+
+def test_dip_buyer_waits_for_pullback(tmp_path):
+    bot, now = make_bot(tmp_path, scalp_dip_min_pct=15, scalp_dip_max_pct=40)
+
+    async def go():
+        await launch(bot, now)
+        price = await organic_pump(bot, now)
+        await bot.drain()
+        assert not bot.positions.open  # at the high: no dip yet
+        now[0] += 0.5
+        await bot.handle(msg("w98", "MINT", "buy", 0.4, 1_000_000, price * 0.75, "dip"))  # -25%
+        await bot.drain()
+        assert "MINT" in bot.positions.open
+
+    asyncio.run(go())
+
+
+def test_experiment_tactics_are_valid_config():
+    from dataclasses import replace
+
+    from pumpbot.experiment import TACTICS, table
+
+    for name, overrides in TACTICS.items():
+        replace(Config(), **overrides)  # raises on unknown fields
+    assert "tactic" in table([])

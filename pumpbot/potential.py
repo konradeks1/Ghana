@@ -108,6 +108,13 @@ class PotentialAnalyzer:
         pump = (t.last_price / w.low - 1) * 100 if w.low > 0 else 0.0
         if pump > c.scalp_max_pump_pct:
             a.reasons.append(f"already +{pump:.0f}% in {c.scalp_window_sec:.0f}s")
+        if c.scalp_require_new_high and w.high > 0 and t.last_price < w.high * 0.98:
+            a.reasons.append("not at a new high")
+        if c.scalp_dip_min_pct > 0:
+            hi = t.window(now, c.scalp_dip_window_sec).high
+            dip = (1 - t.last_price / hi) * 100 if hi > 0 else 0.0
+            if not (c.scalp_dip_min_pct <= dip <= (c.scalp_dip_max_pct or 100)):
+                a.reasons.append(f"dip {dip:.0f}% not in {c.scalp_dip_min_pct:.0f}-{c.scalp_dip_max_pct:.0f}%")
 
         # --- activity gates ----------------------------------------------------
         if w.trades < c.scalp_min_trades:

@@ -23,6 +23,7 @@ class BaseBot:
 
     def __init__(self, cfg: Config, executor, feed=None, clock=time.time, positions_cfg: Config | None = None):
         self.cfg = cfg
+        self.log = logging.getLogger("pumpbot")
         self.executor = executor
         self.feed = feed
         self.clock = clock
@@ -52,7 +53,7 @@ class BaseBot:
         if self.cfg.dry_run and "paper_balance" in data and hasattr(self.executor, "balance_sol"):
             self.executor.balance_sol = data["paper_balance"]
         self.load_extra(data)
-        log.info("restored state: %d open positions", len(self.positions.open))
+        self.log.info("restored state: %d open positions", len(self.positions.open))
 
     def save_state(self) -> None:
         data: dict[str, Any] = {}
@@ -99,7 +100,7 @@ class BaseBot:
             await self._exit(evt.mint, reason)
         elif pos.runner and not was_runner:
             c = self.positions.cfg
-            log.info(
+            self.log.info(
                 "RUNNER %s… hit +%.0f%%: letting it run (trail %.0f%% from peak, floor +%.0f%%)",
                 evt.mint[:8], c.take_profit_pct, c.trailing_stop_pct, c.tp_floor_pct,
             )
@@ -123,7 +124,7 @@ class BaseBot:
             return False
         ok, why = self.positions.can_open(mint, now, await self.executor.balance(), pending=len(self._buying))
         if not ok:
-            log.debug("  not entering %s…: %s", mint[:8], why)
+            self.log.debug("  not entering %s…: %s", mint[:8], why)
             return False
         self._busy.add(mint)
         self._buying.add(mint)
@@ -135,19 +136,19 @@ class BaseBot:
         try:
             fill = await self.executor.buy(mint, c.buy_amount_sol, self.prices.get(mint, price_hint))
             if not fill.ok:
-                log.warning("  buy %s… failed: %s", mint[:8], fill.error)
+                self.log.warning("  buy %s… failed: %s", mint[:8], fill.error)
                 self.positions.last_trade_at[mint] = self.clock()  # don't hammer a failing mint
                 return
             self.positions.add(Position(mint, fill.price, fill.sol, fill.tokens, self.clock(), leaders, probability))
             self.on_bought(mint)
-            log.info(
+            self.log.info(
                 "BUY %s %s%.4f SOL -> %.0f tokens @ %.3e (TP %.3e / SL %.3e) tx=%s",
                 mint, f"[{label}] " if label else "", fill.sol, fill.tokens, fill.price,
                 fill.price * (1 + c.take_profit_pct / 100), fill.price * (1 - c.stop_loss_pct / 100),
                 fill.signature,
             )
         except Exception:
-            log.exception("buy %s… crashed", mint[:8])
+            self.log.exception("buy %s… crashed", mint[:8])
         finally:
             self._busy.discard(mint)
             self._buying.discard(mint)
@@ -168,18 +169,18 @@ class BaseBot:
                 return
             fill = await self.executor.sell(mint, pos.tokens, self.prices.get(mint, pos.last_price))
             if not fill.ok:
-                log.warning("sell %s… failed: %s (will retry)", mint[:8], fill.error)
+                self.log.warning("sell %s… failed: %s (will retry)", mint[:8], fill.error)
                 self._exit_retry[mint] = reason
                 return
             self._exit_retry.pop(mint, None)
             trade = self.positions.close(mint, fill.sol, self.clock(), reason)
-            log.info(
+            self.log.info(
                 "SELL %s… %s pnl=%+.4f SOL (%+.1f%%) held %.0fs tx=%s",
                 mint[:8], reason, trade.pnl_sol, trade.pnl_sol / trade.sol_in * 100,
                 trade.closed_at - trade.opened_at, fill.signature,
             )
         except Exception:
-            log.exception("sell %s… crashed (will retry)", mint[:8])
+            self.log.exception("sell %s… crashed (will retry)", mint[:8])
             self._exit_retry[mint] = reason
         finally:
             self._busy.discard(mint)
@@ -200,7 +201,7 @@ class BaseBot:
     async def maintenance(self) -> None:
         self.save_state()
         st = self.positions.stats()
-        log.info(
+        self.log.info(
             "status: balance=%.3f SOL open=%d closed=%d win=%.0f%% pnl=%+.4f SOL %s",
             await self.executor.balance(), st["open"], st["closed"], st["win_rate"] * 100,
             st["pnl_sol"], self.status_extra(),
@@ -217,7 +218,7 @@ class BaseBot:
 
         self.load_state()
         if not self.cfg.api_key:
-            log.warning(
+            self.log.warning(
                 "PUMPPORTAL_API_KEY not set: PumpPortal only streams new-token events without a "
                 "funded API key, so trades cannot be watched. See README."
             )

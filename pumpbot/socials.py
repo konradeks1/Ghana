@@ -125,6 +125,7 @@ class SocialsChecker:
         self.retries = retries
         self._sleep = sleep
         self.link_owner: dict[str, str] = {}  # normalised link -> first mint that used it
+        self._cache: dict[str, asyncio.Future] = {}
 
     async def _client(self):
         if self._http is None:
@@ -134,8 +135,17 @@ class SocialsChecker:
         return self._http
 
     async def fetch_metadata(self, uri: str) -> dict[str, Any] | None:
+        """Cached: several strategies running side by side share one fetch per coin."""
         if not uri:
             return None
+        fut = self._cache.get(uri)
+        if fut is None:
+            fut = self._cache[uri] = asyncio.ensure_future(self._fetch(uri))
+            while len(self._cache) > 5000:
+                self._cache.pop(next(iter(self._cache)))
+        return await asyncio.shield(fut)
+
+    async def _fetch(self, uri: str) -> dict[str, Any] | None:
         http = await self._client()
         async with self._sem:
             for attempt in range(self.retries):

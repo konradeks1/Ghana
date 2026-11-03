@@ -20,6 +20,7 @@ class Window:
     traders: int = 0
     buyers: int = 0
     low: float = 0.0
+    high: float = 0.0
     first_half_trades: int = 0
     second_half_trades: int = 0
 
@@ -110,7 +111,7 @@ class TokenState:
         w = Window()
         start, mid = now - sec, now - sec / 2
         traders, buyers = set(), set()
-        low = 0.0
+        low = high = 0.0
         for ts, is_buy, sol, trader, _tok, price in reversed(self.trades):
             if ts < start:
                 break
@@ -128,5 +129,6 @@ class TokenState:
             else:
                 w.first_half_trades += 1
             low = price if low == 0 else min(low, price)
-        w.traders, w.buyers, w.low = len(traders), len(buyers), low
+            high = max(high, price)
+        w.traders, w.buyers, w.low, w.high = len(traders), len(buyers), low, high
         return w

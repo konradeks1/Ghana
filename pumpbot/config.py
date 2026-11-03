@@ -133,6 +133,11 @@ class Config:
     scalp_max_entries_per_token: int = 3
     scalp_max_open_positions: int = 5
     scalp_eval_interval_sec: float = 2.0  # re-score each coin at most this often
+    # entry styles (off by default)
+    scalp_require_new_high: bool = False  # breakout: buy only at/near the window high
+    scalp_dip_min_pct: float = 0.0  # dip-buy: require a pullback of at least this % ...
+    scalp_dip_max_pct: float = 0.0  # ... but no more than this % from the recent high
+    scalp_dip_window_sec: float = 180.0
 
     state_file: str = "state.json"
     log_level: str = "INFO"
@@ -184,6 +189,10 @@ class Config:
             scalp_max_entries_per_token=_int("SCALP_MAX_ENTRIES_PER_TOKEN", d.scalp_max_entries_per_token),
             scalp_max_open_positions=_int("SCALP_MAX_OPEN_POSITIONS", d.scalp_max_open_positions),
             scalp_eval_interval_sec=_float("SCALP_EVAL_INTERVAL_SEC", d.scalp_eval_interval_sec),
+            scalp_require_new_high=_bool("SCALP_REQUIRE_NEW_HIGH", False),
+            scalp_dip_min_pct=_float("SCALP_DIP_MIN_PCT", 0.0),
+            scalp_dip_max_pct=_float("SCALP_DIP_MAX_PCT", 0.0),
+            scalp_dip_window_sec=_float("SCALP_DIP_WINDOW_SEC", 180.0),
             dry_run=_bool("DRY_RUN", True),
             paper_balance_sol=_float("PAPER_BALANCE_SOL", 5.0),
             ws_url=_env("WS_URL", cls.ws_url),

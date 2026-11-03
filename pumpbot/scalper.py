@@ -56,7 +56,7 @@ class ScalperBot(BaseBot):
 
     def load_extra(self, data: dict[str, Any]) -> None:
         self.bad_creators.update(data.get("bad_creators", {}))
-        log.info("restored %d blacklisted creators", len(self.bad_creators))
+        self.log.info("restored %d blacklisted creators", len(self.bad_creators))
 
     # --------------------------------------------------------------- events
     async def handle(self, msg: dict) -> None:
@@ -91,7 +91,7 @@ class ScalperBot(BaseBot):
         self.counts["rug_flags"] += 1
         if blacklist:
             self.bad_creators[t.creator] = f"{why} on {t.symbol or t.mint[:8]}"
-        log.info("RUG %s… (%s): %s%s", t.mint[:8], t.symbol, why, " — creator blacklisted" if blacklist else "")
+        self.log.info("RUG %s… (%s): %s%s", t.mint[:8], t.symbol, why, " — creator blacklisted" if blacklist else "")
 
     async def _on_create(self, mint: str, creator: str, ts: float, msg: dict) -> None:
         t = TokenState(
@@ -117,7 +117,7 @@ class ScalperBot(BaseBot):
         try:
             meta = await self.socials.fetch_metadata(t.uri)
         except Exception as e:  # pragma: no cover - network
-            log.debug("metadata %s failed: %s", t.mint[:8], e)
+            self.log.debug("metadata %s failed: %s", t.mint[:8], e)
             meta = None
         if meta is None:
             t.socials, t.socials_note = {}, "metadata unavailable"
@@ -146,9 +146,9 @@ class ScalperBot(BaseBot):
             self._flag(t, a.rug, blacklist=a.rug.startswith("dev sold"))
         if not a.approved:
             self.skip_reasons[_reason_key(a.reasons[0])] += 1
-            log.debug("skip %s", a.summary())
+            self.log.debug("skip %s", a.summary())
             return
-        log.info("signal %s (%s) %s", t.symbol, ", ".join(f"{k}" for k in (t.socials or {})), a.summary())
+        self.log.info("signal %s (%s) %s", t.symbol, ", ".join(f"{k}" for k in (t.socials or {})), a.summary())
         if await self._enter(t.mint, t.last_price, now, [], a.score / 100, f"{t.symbol} score {a.score:.0f}"):
             t.entries += 1
             self.counts["entries"] += 1
