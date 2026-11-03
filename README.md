@@ -159,6 +159,31 @@ The +20% is measured from your **real cost per token**, which includes the
 buy fee, slippage and priority fee. A trade that closes at the +20% floor
 still pays the sell fee and slippage, so it nets roughly **+15–18%**.
 
+## Testing tactics side by side (`pumpbot.experiment`)
+
+Run several tactics at once on the same live data, each with its own
+simulated 5 SOL wallet. This is paper only.
+
+```bash
+# live: 16 built-in tactics for 60 minutes, recording the data
+python -m pumpbot.experiment --minutes 60 --tactics all --record rec.jsonl --out exp1
+# replay any tactics on that recording later, in seconds
+python -m pumpbot.experiment --replay rec.jsonl --tactics all --out exp1-replay
+# your own variants: a JSON file of {"name": {setting: value, ...}}
+python -m pumpbot.experiment --replay rec.jsonl --extra my_tactics.json --tactics all
+```
+
+The tactics are defined at the top of `pumpbot/experiment.py`. Run one in the
+normal bot with `TACTIC=<name> python -m pumpbot`. A replay uses the same
+delay, slippage and rug rules as a live run, and reproduces a live run's
+trades exactly.
+
+**Results so far** (3 rounds of 10 minutes, 16 tactics): almost every trade
+lost money. All the profit came from **one coin** that rose about 350% in a
+minute. The tactics that "won" just held that coin longest, using the runner
+exit. Nothing has shown a reliable edge yet. Record **many hours** across
+different market conditions before you trust any tactic.
+
 ## Copy strategy (`STRATEGY=copy`)
 The original strategy:
 - **Ranking:** the bot ranks wallets by realised profit on new coins over the
