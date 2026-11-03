@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import heapq
+import itertools
 import json
 import logging
 import os
@@ -69,6 +71,47 @@ TACTICS: dict[str, dict] = {
         scalp_fade_sell_ratio=1.01, stop_loss_pct=15, scalp_max_hold_sec=300,
         trailing_stop_pct=12,
     ),
+    # ---- round 2: looser gates (round 1 found almost nothing to buy) ----
+    "quick_flip_loose": dict(
+        scalp_window_sec=30, scalp_min_trades=8, scalp_min_unique_traders=6, scalp_min_buy_ratio=0.55,
+        scalp_min_net_inflow_sol=0.5, scalp_min_score=35, scalp_min_market_cap_sol=15,
+        scalp_max_market_cap_sol=800, take_profit_pct=8, tp_floor_pct=8, trailing_stop_pct=4,
+        stop_loss_pct=7, scalp_max_hold_sec=60, scalp_fade_sell_ratio=0.8,
+    ),
+    "early_bird_loose": dict(
+        scalp_min_age_sec=3, scalp_max_age_sec=90, scalp_window_sec=15, scalp_min_trades=6,
+        scalp_min_unique_traders=5, scalp_min_net_inflow_sol=0.3, scalp_min_score=30,
+        scalp_min_market_cap_sol=15, take_profit_pct=20, tp_floor_pct=20, stop_loss_pct=12,
+        scalp_max_hold_sec=90, scalp_fade_sell_ratio=0.85,
+    ),
+    "dip_buyer_loose": dict(
+        scalp_dip_min_pct=10, scalp_dip_max_pct=45, scalp_min_trades=10, scalp_min_unique_traders=6,
+        scalp_min_buy_ratio=0.45, scalp_min_net_inflow_sol=-1.0, scalp_min_score=30,
+        scalp_min_market_cap_sol=15, scalp_max_market_cap_sol=800,
+        take_profit_pct=12, tp_floor_pct=12, trailing_stop_pct=5, stop_loss_pct=10,
+        scalp_max_hold_sec=180, scalp_fade_sell_ratio=0.85,
+    ),
+    # dip entries but let winners run longer
+    "dip_runner": dict(
+        scalp_dip_min_pct=10, scalp_dip_max_pct=45, scalp_min_trades=10, scalp_min_unique_traders=6,
+        scalp_min_buy_ratio=0.45, scalp_min_net_inflow_sol=-1.0, scalp_min_score=30,
+        scalp_min_market_cap_sol=15, scalp_max_market_cap_sol=800,
+        take_profit_pct=20, tp_floor_pct=15, trailing_stop_pct=10, stop_loss_pct=12,
+        scalp_max_hold_sec=300, scalp_fade_sell_ratio=1.01,
+    ),
+    # baseline logic with half the activity requirement
+    "momentum_lite": dict(
+        scalp_min_trades=15, scalp_min_unique_traders=10, scalp_min_net_inflow_sol=1.0,
+        scalp_min_score=50, scalp_min_market_cap_sol=20, scalp_max_market_cap_sol=600,
+        take_profit_pct=15, tp_floor_pct=15, trailing_stop_pct=7, stop_loss_pct=10,
+    ),
+    # pure trade-count hunter: buy wherever trading is busiest, take +10% fast
+    "volume_hunter": dict(
+        scalp_window_sec=30, scalp_min_trades=20, scalp_min_unique_traders=10, scalp_min_buy_ratio=0.5,
+        scalp_min_net_inflow_sol=0.0, scalp_min_score=0, scalp_min_market_cap_sol=15,
+        scalp_max_market_cap_sol=1000, take_profit_pct=10, tp_floor_pct=10, trailing_stop_pct=5,
+        stop_loss_pct=8, scalp_max_hold_sec=120, scalp_fade_sell_ratio=0.8,
+    ),
 }
 
 
@@ -94,12 +137,24 @@ class FeedProxy:
         pass
 
 
+class NullFeed:
+    def __init__(self):
+        self.tokens: set[str] = set()
+
+    async def subscribe_tokens(self, m):
+        pass
+
+    async def unsubscribe_tokens(self, m):
+        pass
+
+
 class FeedMux:
-    def __init__(self, url: str):
+    def __init__(self, url: str | None, record_path: str | None = None):
         self.bots: list[ScalperBot] = []
         self.proxies: list[FeedProxy] = []
-        self.feed = PumpPortalFeed(url, self.handle)
+        self.feed = PumpPortalFeed(url, self.handle) if url else NullFeed()
         self.messages = 0
+        self._rec = open(record_path, "a") if record_path else None
 
     def proxy(self) -> FeedProxy:
         p = FeedProxy(self)
@@ -108,11 +163,64 @@ class FeedMux:
 
     async def handle(self, msg: dict) -> None:
         self.messages += 1
+        if self._rec:
+            self._rec.write(json.dumps({"t": time.time(), "m": msg}) + "\n")
         for b in self.bots:
             try:
                 await b.handle(msg)
             except Exception:
                 b.log.exception("handler error")
+
+
+class VirtualClock:
+    """Replay time: sleeps resolve when the replay reaches their wake-up time."""
+
+    def __init__(self, start: float):
+        self.now = start
+        self._waiters: list = []
+        self._seq = itertools.count()
+
+    def time(self) -> float:
+        return self.now
+
+    async def sleep(self, dt: float) -> None:
+        fut = asyncio.get_running_loop().create_future()
+        heapq.heappush(self._waiters, (self.now + dt, next(self._seq), fut))
+        await fut
+
+    async def advance(self, t: float) -> None:
+        while self._waiters and self._waiters[0][0] <= t:
+            wake, _, fut = heapq.heappop(self._waiters)
+            self.now = max(self.now, wake)
+            if not fut.done():
+                fut.set_result(None)
+            for _ in range(10):  # let woken orders finish
+                await asyncio.sleep(0)
+        self.now = max(self.now, t)
+        await asyncio.sleep(0)
+
+
+class RecordedSocials(SocialsChecker):
+    def __init__(self, meta: dict[str, dict | None]):
+        super().__init__([])
+        self.meta = meta
+
+    async def fetch_metadata(self, uri: str):
+        return self.meta.get(uri)
+
+
+def dump_metadata(socials: SocialsChecker, path: str) -> None:
+    meta = {}
+    for uri, fut in socials._cache.items():
+        if fut.done() and not fut.cancelled() and fut.exception() is None:
+            meta[uri] = fut.result()
+    existing = {}
+    if os.path.exists(path):
+        with open(path) as f:
+            existing = json.load(f)
+    existing.update(meta)
+    with open(path, "w") as f:
+        json.dump(existing, f)
 
 
 def summarize(name: str, bot: ScalperBot, overrides: dict) -> dict:
@@ -156,18 +264,69 @@ def table(rows: list[dict]) -> str:
     return "\n".join(out)
 
 
-async def run(minutes: float, names: list[str], out_dir: str, extra: dict[str, dict] | None = None) -> list[dict]:
-    base = Config.from_env()
-    base = replace(base, dry_run=True, max_daily_loss_sol=1e9)  # paper only; let every tactic trade
-    tactics = {**TACTICS, **(extra or {})}
-    os.makedirs(out_dir, exist_ok=True)
-    mux = FeedMux(base.ws_endpoint)
-    socials = SocialsChecker(base.ipfs_gateways)
+def _build(mux, names, tactics, base, out_dir, socials, clock=time.time, sleep=asyncio.sleep):
     for name in names:
         cfg = replace(base, **tactics[name], state_file=os.path.join(out_dir, f"{name}.state.json"))
-        bot = ScalperBot(cfg, PaperExecutor(cfg), feed=mux.proxy(), socials=socials)
+        bot = ScalperBot(cfg, PaperExecutor(cfg, sleep=sleep), feed=mux.proxy(), clock=clock, socials=socials)
         bot.log = logging.getLogger(f"pumpbot.{name}")
         mux.bots.append(bot)
+
+
+def _base_config() -> Config:
+    base = Config.from_env()
+    return replace(base, dry_run=True, max_daily_loss_sol=1e9)  # paper only; let every tactic trade
+
+
+async def replay(path: str, names: list[str], out_dir: str, extra: dict[str, dict] | None = None) -> list[dict]:
+    """Re-run tactics on a recorded stream, at full speed, with the same latency rules."""
+    base = _base_config()
+    tactics = {**TACTICS, **(extra or {})}
+    os.makedirs(out_dir, exist_ok=True)
+    for f in os.listdir(out_dir):
+        if f.endswith(".state.json"):
+            os.remove(os.path.join(out_dir, f))
+    with open(path + ".meta.json") as f:
+        meta = json.load(f)
+    with open(path) as f:
+        events = [json.loads(line) for line in f if line.strip()]
+    events.sort(key=lambda e: e["t"])
+    clock = VirtualClock(events[0]["t"])
+    mux = FeedMux(None)
+    _build(mux, names, tactics, base, out_dir, RecordedSocials(meta), clock=clock.time, sleep=clock.sleep)
+    next_tick = events[0]["t"] + 1
+    for e in events:
+        while next_tick <= e["t"]:
+            await clock.advance(next_tick)
+            for b in mux.bots:
+                await b.tick()
+            next_tick += 1
+        await clock.advance(e["t"])
+        await mux.handle(e["m"])
+    await clock.advance(events[-1]["t"] + 5)
+    for b in mux.bots:
+        for mint in list(b.positions.open):
+            await b._exit(mint, "end of test")
+    while any(b._tasks for b in mux.bots):
+        await clock.advance(clock.now + 1)
+    minutes = (events[-1]["t"] - events[0]["t"]) / 60
+    results = [summarize(n, b, tactics[n]) for n, b in zip(names, mux.bots)]
+    with open(os.path.join(out_dir, "results.json"), "w") as f:
+        json.dump({"replay": path, "minutes": minutes, "messages": len(events), "results": results}, f, indent=1)
+    logging.getLogger("pumpbot.experiment").info(
+        "REPLAY of %.0f min (%d msgs):\n%s", minutes, len(events), table(results)
+    )
+    return results
+
+
+async def run(
+    minutes: float, names: list[str], out_dir: str, extra: dict[str, dict] | None = None, record: str | None = None
+) -> list[dict]:
+    base = _base_config()
+    tactics = {**TACTICS, **(extra or {})}
+    os.makedirs(out_dir, exist_ok=True)
+    mux = FeedMux(base.ws_endpoint, record)
+    socials = SocialsChecker(base.ipfs_gateways)
+    _build(mux, names, tactics, base, out_dir, socials)
     log = logging.getLogger("pumpbot.experiment")
     log.info("running %d tactics for %.0f min: %s", len(names), minutes, ", ".join(names))
 
@@ -191,6 +350,9 @@ async def run(minutes: float, names: list[str], out_dir: str, extra: dict[str, d
     finally:
         mux.feed.stop()
         feed_task.cancel()
+        if record:
+            mux._rec.close()
+            dump_metadata(socials, record + ".meta.json")
         await socials.close()
 
     results = [summarize(n, b, tactics[n]) for n, b in zip(names, mux.bots)]
@@ -206,6 +368,8 @@ def main() -> None:
     ap.add_argument("--tactics", default=",".join(TACTICS))
     ap.add_argument("--extra", default="", help="JSON file with additional {name: overrides}")
     ap.add_argument("--out", default="experiments")
+    ap.add_argument("--record", default="", help="append the live stream to this .jsonl file")
+    ap.add_argument("--replay", default="", help="replay a recorded .jsonl instead of going live")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)-22s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -213,7 +377,12 @@ def main() -> None:
     if args.extra:
         with open(args.extra) as f:
             extra = json.load(f)
-    asyncio.run(run(args.minutes, [n.strip() for n in args.tactics.split(",") if n.strip()], args.out, extra))
+    tactics = {**TACTICS, **extra}
+    names = list(tactics) if args.tactics == "all" else [n.strip() for n in args.tactics.split(",") if n.strip()]
+    if args.replay:
+        asyncio.run(replay(args.replay, names, args.out, extra))
+    else:
+        asyncio.run(run(args.minutes, names, args.out, extra, args.record or None))
 
 
 if __name__ == "__main__":
