@@ -154,10 +154,11 @@ class BaseBot:
                 return
             self.positions.add(Position(mint, fill.price, fill.sol, fill.tokens, self.clock(), leaders, probability))
             self.on_bought(mint)
+            lock_pct = c.any_profit_arm_pct + c.exit_cost_pct if c.any_profit_mode else c.take_profit_pct
             self.log.info(
-                "BUY %s %s%.4f SOL -> %.0f tokens @ %.3e (TP %.3e / SL %.3e) tx=%s",
+                "BUY %s %s%.4f SOL -> %.0f tokens @ %.3e (lock-in %.3e / SL %.3e) tx=%s",
                 mint, f"[{label}] " if label else "", fill.sol, fill.tokens, fill.price,
-                fill.price * (1 + c.take_profit_pct / 100), fill.price * (1 - c.stop_loss_pct / 100),
+                fill.price * (1 + lock_pct / 100), fill.price * (1 - c.stop_loss_pct / 100),
                 fill.signature,
             )
         except Exception:
