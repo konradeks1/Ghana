@@ -26,7 +26,10 @@ PumpPortal websocket ──► new tokens ──► all trades on fresh tokens
           Entry analyzer ── P(+20% before −SL), expected value after fees
                                             │  approved + risk checks pass
                                             ▼
-                    BUY ──► exit on +20% │ −12% stop │ 20 min timeout │ leader sells
+                    BUY ──► −12% stop │ 20 min timeout │ leader sells
+                         │
+                         └─ hits +20% ──► RUNNER: no cap, trail 10% below peak,
+                                          never sell below +20%, 60 min max
 ```
 
 1. **Discovery (`leaderboard.py`)** – Subscribes to every new Pump.fun token
@@ -54,8 +57,15 @@ PumpPortal websocket ──► new tokens ──► all trades on fresh tokens
    slippage. Live mode asks PumpPortal's `trade-local` API to build the
    transaction, signs it **locally** (your key never leaves your machine) and
    sends it through your RPC.
-5. **Exits and risk (`positions.py`)** – Take profit at **+20%**. Stop loss at
-   −12%. Close after 20 minutes at most. Optionally exit when the leader sells.
+5. **Exits and risk (`positions.py`)**
+   - *Before +20%:* stop loss at −12%, close after 20 minutes, and exit if the
+     leader sells.
+   - *At +20%, the trade becomes a runner:* the bot doesn't sell, so the gain can
+     keep climbing (+50%, +100%, …). The bot tracks the peak price and sells
+     when price falls 10% below it. A **+20% floor** means a runner never closes
+     below +20%. Leader sells no longer close runners, since leaders often take
+     profit early. Runners close after 60 minutes at most.
+   - Set `LET_WINNERS_RUN=false` to go back to selling at exactly +20%.
    Limits: at most 3 open positions, a daily loss cap, and a 30-minute
    cooldown before re-buying the same token.
 
@@ -92,7 +102,10 @@ All knobs are in `.env.example`. The most important ones:
 | Setting | Default | Meaning |
 |---|---|---|
 | `TOP_N_TRADERS` | 25 | how many top wallets to follow |
-| `TAKE_PROFIT_PCT` | 20 | exit target, measured on price from your fill |
+| `TAKE_PROFIT_PCT` | 20 | the gain where a trade becomes a runner, measured on price from your fill |
+| `LET_WINNERS_RUN` | true | +20% is the minimum, not the cap |
+| `TRAILING_STOP_PCT` | 10 | runner sells this far below its peak |
+| `TP_FLOOR_PCT` | 20 | a runner never exits below this gain |
 | `STOP_LOSS_PCT` | 12 | cut losers |
 | `MIN_WIN_PROB` | 0.55 | minimum estimated chance of hitting TP first |
 | `MIN_EXPECTED_VALUE_PCT` | 3 | minimum EV after fees |
@@ -101,7 +114,8 @@ All knobs are in `.env.example`. The most important ones:
 | `MAX_DAILY_LOSS_SOL` | 0.5 | stop opening trades for the day after this loss |
 
 The +20% is measured on token price. After Pump.fun's 1% fee on each side,
-slippage and priority fees, a take-profit nets roughly **+15–17%**.
+slippage and priority fees, a trade that closes at the +20% floor nets roughly
+**+15–17%**. Raise `TP_FLOOR_PCT` to about 25 if you want **+20% net**.
 
 ## Known limits
 - The leaderboard only sees trades on tokens tracked since the bot started. A

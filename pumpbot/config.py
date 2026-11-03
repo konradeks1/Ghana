@@ -56,6 +56,11 @@ class Config:
     stop_loss_pct: float = 12.0
     max_hold_sec: int = 1200
     exit_on_leader_sell: bool = True
+    # winners: +TP is the minimum, not the cap
+    let_winners_run: bool = True
+    trailing_stop_pct: float = 10.0  # sell when price drops this far from its peak
+    tp_floor_pct: float = 20.0  # ...but never exit a runner below this gain
+    runner_max_hold_sec: int = 3600
 
     # --- entry analysis -----------------------------------------------------
     min_win_prob: float = 0.55
@@ -114,6 +119,10 @@ class Config:
             stop_loss_pct=_float("STOP_LOSS_PCT", 12.0),
             max_hold_sec=_int("MAX_HOLD_SEC", 1200),
             exit_on_leader_sell=_bool("EXIT_ON_LEADER_SELL", True),
+            let_winners_run=_bool("LET_WINNERS_RUN", True),
+            trailing_stop_pct=_float("TRAILING_STOP_PCT", 10.0),
+            tp_floor_pct=_float("TP_FLOOR_PCT", 20.0),
+            runner_max_hold_sec=_int("RUNNER_MAX_HOLD_SEC", 3600),
             min_win_prob=_float("MIN_WIN_PROB", 0.55),
             min_expected_value_pct=_float("MIN_EXPECTED_VALUE_PCT", 3.0),
             max_chase_pct=_float("MAX_CHASE_PCT", 8.0),

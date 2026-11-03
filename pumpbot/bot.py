@@ -139,17 +139,27 @@ class CopyTradeBot:
             else:
                 s.copy_misses += 1
 
-        if evt.trader in self.followed:
-            if evt.is_buy:
-                await self._on_leader_buy(evt)
-            elif evt.mint in self.positions.open and self.cfg.exit_on_leader_sell:
-                if evt.trader in self.positions.open[evt.mint].leaders:
-                    await self._exit(evt.mint, f"leader {evt.trader[:6]} sold")
-
-        if evt.mint in self.positions.open:
+        pos = self.positions.open.get(evt.mint)
+        if pos is not None:
+            was_runner = pos.runner
             reason = self.positions.exit_reason(evt.mint, evt.price, evt.timestamp)
             if reason:
                 await self._exit(evt.mint, reason)
+            elif pos.runner and not was_runner:
+                log.info(
+                    "RUNNER %s… hit +%.0f%%: letting it run (trail %.0f%% from peak, floor +%.0f%%)",
+                    evt.mint[:8], self.cfg.take_profit_pct, self.cfg.trailing_stop_pct, self.cfg.tp_floor_pct,
+                )
+
+        if evt.trader in self.followed:
+            if evt.is_buy:
+                await self._on_leader_buy(evt)
+            elif self.cfg.exit_on_leader_sell:
+                pos = self.positions.open.get(evt.mint)
+                # runners are protected by the floor/trailing stop, so a leader
+                # taking profit doesn't cut them short
+                if pos is not None and not pos.runner and evt.trader in pos.leaders:
+                    await self._exit(evt.mint, f"leader {evt.trader[:6]} sold")
 
     async def _on_leader_buy(self, evt: TradeEvent) -> None:
         self.outcomes.add(evt.trader, evt.mint, evt.price, evt.timestamp)

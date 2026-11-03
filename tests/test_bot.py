@@ -148,14 +148,43 @@ def test_confluence_raises_probability():
 
 
 # -------------------------------------------------------------- positions
-def test_position_exits():
-    c = cfg(take_profit_pct=20, stop_loss_pct=10, max_hold_sec=60)
+def test_position_exits_fixed_tp():
+    c = cfg(take_profit_pct=20, stop_loss_pct=10, max_hold_sec=60, let_winners_run=False)
     pm = PositionManager(c)
     pm.add(Position("m", 1.0, 0.1, 100, opened_at=0))
     assert pm.exit_reason("m", 1.1, 1) is None
     assert pm.exit_reason("m", 1.2, 2).startswith("take-profit")
     assert pm.exit_reason("m", 0.9, 3).startswith("stop-loss")
     assert pm.exit_reason("m", 1.0, 61).startswith("timeout")
+
+
+def test_winner_runs_past_tp_with_trailing_stop():
+    c = cfg(take_profit_pct=20, stop_loss_pct=10, trailing_stop_pct=10, tp_floor_pct=20, max_hold_sec=60)
+    pm = PositionManager(c)
+    pm.add(Position("m", 1.0, 0.1, 100, opened_at=0))
+    assert pm.exit_reason("m", 1.25, 1) is None  # hits +TP -> becomes a runner
+    assert pm.open["m"].runner
+    assert pm.exit_reason("m", 2.0, 100) is None  # no cap, no normal timeout
+    assert pm.exit_reason("m", 1.85, 101) is None  # -7.5% from peak: hold
+    r = pm.exit_reason("m", 1.79, 102)  # -10.5% from peak: trailing stop
+    assert r.startswith("runner trailing-stop") and "peak +100.0%" in r
+
+
+def test_runner_never_exits_below_floor():
+    c = cfg(take_profit_pct=20, trailing_stop_pct=10, tp_floor_pct=20)
+    pm = PositionManager(c)
+    pm.add(Position("m", 1.0, 0.1, 100, opened_at=0))
+    pm.exit_reason("m", 1.22, 1)  # runner armed
+    assert pm.exit_reason("m", 1.21, 2) is None  # trail would be 1.098, floor holds 1.20
+    assert pm.exit_reason("m", 1.19, 3).startswith("runner floor")
+
+
+def test_runner_timeout():
+    c = cfg(runner_max_hold_sec=100)
+    pm = PositionManager(c)
+    pm.add(Position("m", 1.0, 0.1, 100, opened_at=0))
+    pm.exit_reason("m", 1.3, 10)
+    assert pm.exit_reason("m", 1.3, 111).startswith("runner timeout")
 
 
 def test_risk_limits():
@@ -191,13 +220,21 @@ def test_end_to_end_copy_trade_takes_profit(tmp_path):
         assert "MOON" in bot.positions.open
         entry = bot.positions.open["MOON"].entry_price
 
-        # 3) price rises past +20% -> bot takes profit
+        # 3) price rises past +20% -> runner, keeps riding
         now[0] += 30
         await bot.handle(msg("rando", "MOON", "buy", 2.0, 1000, entry * 1.25, "pump"))
+        assert bot.positions.open["MOON"].runner
+        await bot.handle(msg("rando", "MOON", "buy", 2.0, 1000, entry * 1.8, "pump2"))
+        # leader taking profit doesn't cut a runner short
+        await bot.handle(msg("pro", "MOON", "sell", 1.0, 1000, entry * 1.75, "lsell"))
+        assert "MOON" in bot.positions.open
+
+        # 4) price falls >10% from the +80% peak -> trailing stop sells
+        await bot.handle(msg("rando", "MOON", "sell", 2.0, 1000, entry * 1.6, "dump"))
         assert "MOON" not in bot.positions.open
         trade = bot.positions.closed[-1]
-        assert trade.reason.startswith("take-profit")
-        assert trade.pnl_sol > 0
+        assert trade.reason.startswith("runner trailing-stop")
+        assert trade.pnl_sol / trade.sol_in > 0.4
 
         await bot.maintenance()
 
