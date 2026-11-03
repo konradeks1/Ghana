@@ -78,7 +78,8 @@ class PumpPortalFeed:
                             note = str(msg["message"])
                             if note not in self._notices:
                                 self._notices.add(note)
-                                log.warning("pumpportal: %s", note)
+                                level = logging.INFO if note.lower().startswith("success") else logging.WARNING
+                                log.log(level, "pumpportal: %s", note)
                             continue
                         if isinstance(msg, dict) and "txType" in msg:
                             try:
