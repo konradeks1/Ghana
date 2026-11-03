@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from .models import TradeEvent
 
 TOTAL_SUPPLY = 1_000_000_000.0  # every pump.fun coin
+CURVE_VIRTUAL_TOKENS = 1_073_000_000.0  # pump.fun bonding curve starts with this many virtual tokens
 
 
 @dataclass
@@ -68,6 +69,7 @@ class TokenState:
     last_eval: float = 0.0
     # coins discovered mid-life (no launch history): holder data comes from the RPC
     partial: bool = False
+    circulating: float = 0.0  # tokens outside the curve / pool, i.e. held by wallets
     pair: str = ""
     discovered_mcap_usd: float = 0.0
     last_trade_at: float = 0.0
@@ -76,6 +78,11 @@ class TokenState:
         self.trades.append((evt.timestamp, evt.is_buy, evt.sol_amount, evt.trader, evt.token_amount, evt.price))
         self.last_price = evt.price
         self.last_trade_at = evt.timestamp
+        if evt.reserve_tokens > 0:
+            if evt.pool == "pump":
+                self.circulating = max(0.0, CURVE_VIRTUAL_TOKENS - evt.reserve_tokens)
+            else:  # graduated / AMM pool
+                self.circulating = max(0.0, TOTAL_SUPPLY - evt.reserve_tokens)
         if evt.market_cap_sol:
             self.market_cap_sol = evt.market_cap_sol
         delta = evt.token_amount if evt.is_buy else -evt.token_amount
@@ -107,6 +114,14 @@ class TokenState:
             if b > amt:
                 best, amt = w, b
         return best, self.pct(amt)
+
+    @property
+    def hidden_supply_pct(self) -> float:
+        """Supply held by wallets we never saw buy: bundled launch buys, transfers,
+        or coins launched straight into a pool with the dev keeping most tokens."""
+        if self.circulating <= 0:
+            return 0.0
+        return self.pct(max(0.0, self.circulating - sum(self.balances.values())))
 
     @property
     def early_supply_pct(self) -> float:

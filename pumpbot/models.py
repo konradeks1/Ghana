@@ -19,6 +19,7 @@ class TradeEvent:
     market_cap_sol: float
     timestamp: float
     pool: str = "pump"
+    reserve_tokens: float = 0.0  # tokens left in the bonding curve (virtual) or AMM pool
 
     @property
     def is_buy(self) -> bool:
@@ -57,4 +58,5 @@ class TradeEvent:
             market_cap_sol=mcap,
             timestamp=now if now is not None else time.time(),
             pool=str(msg.get("pool", "pump")),
+            reserve_tokens=v_tok,
         )

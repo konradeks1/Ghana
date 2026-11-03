@@ -81,6 +81,8 @@ class PotentialAnalyzer:
             return f"dev sold {t.pct(t.dev_sold):.1f}% of supply", ""
         if t.early_supply_pct > c.rug_max_early_supply_pct:
             return f"bundled launch: {t.early_supply_pct:.0f}% bought in first 3s", ""
+        if now - t.created_at > 30 and t.hidden_supply_pct > c.rug_max_hidden_supply_pct:
+            return "", f"{t.hidden_supply_pct:.0f}% of supply held by wallets that never bought (bundles/dev bags)"
         if t.dev_pct > c.rug_max_dev_pct:
             return "", f"dev holds {t.dev_pct:.1f}%"
         top10 = t.top_holders_pct(10)

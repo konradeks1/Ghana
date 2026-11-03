@@ -138,6 +138,7 @@ who holds what and how they behave:
 | >25% of supply bought in the first 3 seconds (bundled launch) | Never buy |
 | Dev holds >10%, top-10 wallets hold >35%, or one wallet holds >8% | Skip (re-checked later) |
 | Few wallets making many trades (diversity <25%) | Skip: fake volume / wash trading |
+| >15% of supply held by wallets the bot never saw buy | Skip: bundled buys in the launch block, tokens moved by transfer, or a coin launched straight into a pool with the creator keeping most of the supply. The bot compares the tokens that have left the curve or pool with what known wallets hold. |
 | One wallet sells ≥3% of supply in one trade while we hold | Sell immediately |
 | Links reused from another coin | Never buy |
 

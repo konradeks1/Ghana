@@ -134,6 +134,7 @@ class Config:
     rug_min_trader_diversity: float = 0.25  # unique traders / trades (wash trading)
     rug_max_creator_launches_per_hour: int = 3  # serial launchers
     rug_dump_exit_pct: float = 3.0  # exit if one wallet sells this % of supply at once
+    rug_max_hidden_supply_pct: float = 15.0  # supply in wallets we never saw buy (bundles / dev-held)
     # scalp exits / pacing
     scalp_max_hold_sec: int = 180
     scalp_fade_window_sec: float = 15.0
@@ -243,6 +244,7 @@ class Config:
                 "RUG_MAX_CREATOR_LAUNCHES_PER_HOUR", d.rug_max_creator_launches_per_hour
             ),
             rug_dump_exit_pct=_float("RUG_DUMP_EXIT_PCT", d.rug_dump_exit_pct),
+            rug_max_hidden_supply_pct=_float("RUG_MAX_HIDDEN_SUPPLY_PCT", d.rug_max_hidden_supply_pct),
             scalp_max_hold_sec=_int("SCALP_MAX_HOLD_SEC", d.scalp_max_hold_sec),
             scalp_fade_window_sec=_float("SCALP_FADE_WINDOW_SEC", d.scalp_fade_window_sec),
             scalp_fade_sell_ratio=_float("SCALP_FADE_SELL_RATIO", d.scalp_fade_sell_ratio),

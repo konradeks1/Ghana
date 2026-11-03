@@ -139,3 +139,30 @@ def test_est_tactics_exist():
     est = [n for n in TACTICS if n.startswith("est_")]
     assert len(est) >= 5
     assert all(TACTICS[n]["scalp_min_market_cap_usd"] == 25_000 for n in est)
+
+
+def test_hidden_supply_blocks_dev_held_pool_launch(tmp_path):
+    """Regression: a coin launched straight into a PumpSwap pool holding only 12% of
+    supply; wallets that never traded dumped 33% and every tactic lost -96%."""
+    bot, market, now = _bot(tmp_path, require_holder_check=False)
+
+    async def go():
+        now[0] = 0.0
+        create = amm_msg("DEV", "create", 0.0, 0.0, 150.0, 120_000_000, "c", mcap_sol=1250)
+        create["initialBuy"] = 0
+        await bot.handle(create)
+        await bot.drain()
+        sol_pool, tok_pool = 150.0, 120_000_000.0  # 880M tokens outside the pool, nobody seen buying them
+        for i in range(60):
+            now[0] = 40 + i * 1.0
+            side = "sell" if i % 6 == 5 else "buy"
+            sol_pool *= 1.002 if side == "buy" else 0.999
+            tok_pool *= 0.9995 if side == "buy" else 1.0003
+            await bot.handle(amm_msg(f"w{i % 25}", side, 0.6, 50_000, sol_pool, tok_pool, f"h{i}", mcap_sol=1250))
+        await bot.drain()
+        t = bot.tokens[MINT]
+        assert t.hidden_supply_pct > 80
+        assert not bot.positions.open
+        assert any("never bought" in k for k in bot.skip_reasons)
+
+    asyncio.run(go())
