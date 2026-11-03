@@ -73,10 +73,10 @@ class PaperExecutor:
         self.balance_sol -= cost
         return Fill(True, cost, tokens, cost / tokens, "paper")
 
-    async def sell(self, mint: str, tokens: float, price: float) -> Fill:
+    async def sell(self, mint: str, tokens: float, price: float, slippage_pct: float | None = None) -> Fill:
         market = await self._market_price(mint, price)
         moved = (1 - market / price) * 100
-        if moved > self.cfg.slippage_pct:
+        if moved > (slippage_pct if slippage_pct is not None else self.cfg.sell_slippage_pct):
             return Fill(False, 0, tokens, market, error=f"slippage exceeded: price -{moved:.1f}% during latency")
         fill_price = market * (1 - self._impact_pct(mint, tokens * market) / 100)
         sol = tokens * fill_price * (1 - self.cfg.fee_pct / 100) - self.cfg.priority_fee_sol
@@ -153,7 +153,9 @@ class PumpPortalExecutor:
             await self._sleep(1.0)
         return None
 
-    async def _send(self, action: str, mint: str, amount: float | str, in_sol: bool) -> tuple[str, str]:
+    async def _send(
+        self, action: str, mint: str, amount: float | str, in_sol: bool, slippage_pct: float | None = None
+    ) -> tuple[str, str]:
         from solders.transaction import VersionedTransaction
 
         resp = await self.http.post(
@@ -164,7 +166,7 @@ class PumpPortalExecutor:
                 "mint": mint,
                 "amount": amount,
                 "denominatedInSol": "true" if in_sol else "false",
-                "slippage": self.cfg.slippage_pct,
+                "slippage": slippage_pct if slippage_pct is not None else self.cfg.slippage_pct,
                 "priorityFee": self.cfg.priority_fee_sol,
                 "pool": self.cfg.pool,
             },
@@ -206,12 +208,15 @@ class PumpPortalExecutor:
         except Exception as e:
             return Fill(False, 0, 0, price, error=f"{type(e).__name__}: {e}")
 
-    async def sell(self, mint: str, tokens: float, price: float) -> Fill:
+    async def sell(self, mint: str, tokens: float, price: float, slippage_pct: float | None = None) -> Fill:
         try:
             before = await self.token_balance(mint)
             if before <= 0:
                 return Fill(False, 0, 0, price, error="no tokens in wallet")
-            sig, err = await self._send("sell", mint, "100%", in_sol=False)
+            sig, err = await self._send(
+                "sell", mint, "100%", in_sol=False,
+                slippage_pct=slippage_pct if slippage_pct is not None else self.cfg.sell_slippage_pct,
+            )
             if err:
                 return Fill(False, 0, before, price, error=err)
             ok, err = await self._confirm(sig)

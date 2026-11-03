@@ -68,8 +68,12 @@ the price climbs. Set `ANY_PROFIT_MODE=false` to go back to a fixed target
 
 ## Slippage
 
-- **Live:** fills accept at most a 5% price move (`SLIPPAGE_PCT`, was 10%). That
+- **Buys:** fills accept at most a 5% price move (`SLIPPAGE_PCT`, was 10%). That
   gives better prices but more missed fills in fast pumps.
+- **Sells:** sells start at 30% slippage and widen by 20% after every failed
+  try, up to 95% (`SELL_SLIPPAGE_*`). A tight sell limit is dangerous. In
+  testing, a coin dumped −60% within the 1.5 s fill delay, and with a 5% limit
+  every sell failed until the position was down 99%.
 - **Paper:** price impact is calculated from the coin's actual bonding-curve
   liquidity. A 0.1 SOL buy into a curve holding 40 SOL costs about 0.25%. On
   top of that comes 0.5% for other traders in the same block (it used to be a

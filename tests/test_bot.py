@@ -299,9 +299,10 @@ def test_paper_fills_at_price_after_latency():
     market["m"] = 1.2  # +20% during latency > 10% slippage limit
     assert not asyncio.run(ex.buy("m", 0.1, 1.0)).ok
 
-    market["m"] = 0.8  # crash during latency: sell fails like a real one would
+    market["m"] = 0.6  # -40% crash during latency: fails at the default 30% sell slippage...
     bad = asyncio.run(ex.sell("m", 100, 1.0))
     assert not bad.ok and "slippage" in bad.error
+    assert asyncio.run(ex.sell("m", 100, 1.0, slippage_pct=50)).ok  # ...but a wider retry gets out
 
 
 def test_failed_sell_is_retried(tmp_path):
@@ -310,12 +311,12 @@ def test_failed_sell_is_retried(tmp_path):
     class FlakyPaper(PaperExecutor):
         fails = 1
 
-        async def sell(self, mint, tokens, price):
+        async def sell(self, mint, tokens, price, slippage_pct=None):
             if self.fails:
                 self.fails -= 1
                 from pumpbot.executor import Fill
                 return Fill(False, 0, tokens, price, error="boom")
-            return await super().sell(mint, tokens, price)
+            return await super().sell(mint, tokens, price, slippage_pct)
 
     bot = CopyTradeBot(c, FlakyPaper(c), feed=FakeFeed(), clock=lambda: 50.0)
     _proven_trader(bot.leaderboard, "pro")
@@ -451,3 +452,35 @@ def test_any_profit_floor_keeps_trade_net_positive():
     pm.exit_reason("m", 1.05, 1)
     assert pm.exit_reason("m", 1.03, 2) is None  # +1.5% net, above the +1% floor
     assert pm.exit_reason("m", 1.024, 3).startswith("runner floor")  # +0.9% net
+
+
+def test_sell_slippage_widens_until_it_gets_out_of_a_crash(tmp_path):
+    """Regression: a 5% limit on sells left positions stuck while a coin dumped -99%."""
+    c = cfg(tmp_path, paper_latency_sec=1.5, sell_slippage_pct=30, sell_slippage_step_pct=20,
+            sell_slippage_max_pct=95)
+    clock = [50.0]
+    prices = {}
+
+    async def sleep(dt):  # the price keeps collapsing during every fill delay
+        prices["M"] = prices["M"] * 0.4
+
+    bot = CopyTradeBot(c, PaperExecutor(c, sleep=sleep), feed=FakeFeed(), clock=lambda: clock[0])
+    bot.executor.price_fn = prices.get
+    from pumpbot.positions import Position
+
+    bot.positions.add(Position("M", 1e-6, 0.1, 100_000, opened_at=0))
+    prices["M"] = bot.prices["M"] = 1e-6
+
+    async def go():
+        await bot._exit("M", "stop-loss")
+        await bot.drain()
+        attempts = 1
+        while "M" in bot.positions.open and attempts < 10:
+            bot.prices["M"] = prices["M"]
+            await bot.tick()
+            await bot.drain()
+            attempts += 1
+        assert "M" not in bot.positions.open
+        assert attempts <= 3  # 30% -> 50% -> 70%: out on the third try (-60% per delay)
+
+    asyncio.run(go())

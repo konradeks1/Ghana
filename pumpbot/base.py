@@ -34,6 +34,7 @@ class BaseBot:
         self._busy: set[str] = set()  # mints with an order in flight
         self._buying: set[str] = set()
         self._exit_retry: dict[str, str] = {}  # mint -> reason, for failed sells
+        self._sell_attempts: dict[str, int] = {}  # failed sells so far -> wider slippage
         self._tasks: set[asyncio.Task] = set()
         # async callbacks: enter_hooks(bot, mint, price, probability, label), exit_hooks(bot, mint, reason)
         self.enter_hooks: list = []
@@ -183,12 +184,17 @@ class BaseBot:
             pos = self.positions.open.get(mint)
             if pos is None:
                 return
-            fill = await self.executor.sell(mint, pos.tokens, self.prices.get(mint, pos.last_price))
+            c = self.positions.cfg
+            tries = self._sell_attempts.get(mint, 0)
+            slip = min(c.sell_slippage_max_pct, c.sell_slippage_pct + tries * c.sell_slippage_step_pct)
+            fill = await self.executor.sell(mint, pos.tokens, self.prices.get(mint, pos.last_price), slip)
             if not fill.ok:
-                self.log.warning("sell %s… failed: %s (will retry)", mint[:8], fill.error)
+                self._sell_attempts[mint] = tries + 1
+                self.log.warning("sell %s… failed at %.0f%% slippage: %s (will retry wider)", mint[:8], slip, fill.error)
                 self._exit_retry[mint] = reason
                 return
             self._exit_retry.pop(mint, None)
+            self._sell_attempts.pop(mint, None)
             trade = self.positions.close(mint, fill.sol, self.clock(), reason)
             self.log.info(
                 "SELL %s… %s pnl=%+.4f SOL (%+.1f%%) held %.0fs tx=%s",

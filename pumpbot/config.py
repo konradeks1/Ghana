@@ -89,7 +89,11 @@ class Config:
     max_open_positions: int = 3
     max_daily_loss_sol: float = 0.5
     mint_cooldown_sec: int = 1800
-    slippage_pct: float = 5.0  # max price move tolerated on a fill (was 10)
+    slippage_pct: float = 5.0  # max price move tolerated on a BUY (was 10)
+    # sells must get out even in a crash: start wider and widen on every failed attempt
+    sell_slippage_pct: float = 30.0
+    sell_slippage_step_pct: float = 20.0
+    sell_slippage_max_pct: float = 95.0
     priority_fee_sol: float = 0.0005
     fee_pct: float = 1.0  # pump.fun fee per side
     pool: str = "auto"
@@ -287,6 +291,9 @@ class Config:
             max_daily_loss_sol=_float("MAX_DAILY_LOSS_SOL", 0.5),
             mint_cooldown_sec=_int("MINT_COOLDOWN_SEC", 1800),
             slippage_pct=_float("SLIPPAGE_PCT", 5.0),
+            sell_slippage_pct=_float("SELL_SLIPPAGE_PCT", 30.0),
+            sell_slippage_step_pct=_float("SELL_SLIPPAGE_STEP_PCT", 20.0),
+            sell_slippage_max_pct=_float("SELL_SLIPPAGE_MAX_PCT", 95.0),
             priority_fee_sol=_float("PRIORITY_FEE_SOL", 0.0005),
             fee_pct=_float("FEE_PCT", 1.0),
             pool=_env("POOL", "auto"),
