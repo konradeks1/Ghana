@@ -112,6 +112,28 @@ TACTICS: dict[str, dict] = {
         scalp_max_market_cap_sol=1000, take_profit_pct=10, tp_floor_pct=10, trailing_stop_pct=5,
         stop_loss_pct=8, scalp_max_hold_sec=120, scalp_fade_sell_ratio=0.8,
     ),
+    # ---- round 3: buy accumulation BEFORE the spike (round 2 bought after +20-95% run-ups) ----
+    "calm_accumulation": dict(
+        scalp_window_sec=30, scalp_max_pump_pct=15, scalp_min_trades=10, scalp_min_unique_traders=6,
+        scalp_min_buy_ratio=0.6, scalp_min_net_inflow_sol=0.5, scalp_min_score=30,
+        scalp_min_market_cap_sol=15, scalp_max_market_cap_sol=800,
+        take_profit_pct=12, tp_floor_pct=12, trailing_stop_pct=5, stop_loss_pct=10,
+        scalp_max_hold_sec=180, scalp_fade_sell_ratio=0.85,
+    ),
+    "calm_runner": dict(
+        scalp_window_sec=30, scalp_max_pump_pct=15, scalp_min_trades=10, scalp_min_unique_traders=6,
+        scalp_min_buy_ratio=0.6, scalp_min_net_inflow_sol=0.5, scalp_min_score=30,
+        scalp_min_market_cap_sol=15, scalp_max_market_cap_sol=800,
+        take_profit_pct=20, tp_floor_pct=15, trailing_stop_pct=10, stop_loss_pct=12,
+        scalp_max_hold_sec=300, scalp_fade_sell_ratio=1.01,
+    ),
+    "calm_strict": dict(
+        scalp_window_sec=60, scalp_max_pump_pct=10, scalp_min_trades=20, scalp_min_unique_traders=12,
+        scalp_min_buy_ratio=0.65, scalp_min_net_inflow_sol=1.0, scalp_min_score=40,
+        scalp_min_market_cap_sol=20, scalp_max_market_cap_sol=600,
+        take_profit_pct=15, tp_floor_pct=15, trailing_stop_pct=7, stop_loss_pct=10,
+        scalp_max_hold_sec=240, scalp_fade_sell_ratio=0.85,
+    ),
 }
 
 
@@ -308,6 +330,8 @@ async def replay(path: str, names: list[str], out_dir: str, extra: dict[str, dic
             await b._exit(mint, "end of test")
     while any(b._tasks for b in mux.bots):
         await clock.advance(clock.now + 1)
+    for b in mux.bots:
+        b.save_state()
     minutes = (events[-1]["t"] - events[0]["t"]) / 60
     results = [summarize(n, b, tactics[n]) for n, b in zip(names, mux.bots)]
     with open(os.path.join(out_dir, "results.json"), "w") as f:
