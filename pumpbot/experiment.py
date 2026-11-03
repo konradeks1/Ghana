@@ -236,8 +236,13 @@ async def run(
                 await b.tick()
             if time.time() - last_report >= 60:
                 last_report = time.time()
-                rows = [summarize(n, b, {}) for n, b in zip(names, mux.bots)]
+                rows = [summarize(n, b, tactics.get(n, {})) for n, b in zip(names, mux.bots)]
                 log.info("after %.0f min (%d msgs):\n%s", (time.time() - start) / 60, mux.messages, table(rows))
+                with open(os.path.join(out_dir, "results.json"), "w") as f:  # interim, survives a crash
+                    json.dump({"minutes": (time.time() - start) / 60, "messages": mux.messages,
+                               "interim": True, "results": rows}, f, indent=1)
+                for b in mux.bots:
+                    b.save_state()
         # close anything still open at the last seen price so results are complete
         for b in mux.bots:
             for mint in list(b.positions.open):

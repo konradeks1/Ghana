@@ -47,7 +47,7 @@ class FeedMux:
         self.proxies: list[FeedProxy] = []
         self.feed = PumpPortalFeed(url, self.handle) if url else NullFeed()
         self.messages = 0
-        self._rec = open(record_path, "a") if record_path else None
+        self._rec = open(record_path, "a", buffering=1) if record_path else None  # line-buffered: safe if killed
 
     def record_extra(self, rec: dict) -> None:
         """Market data (SOL price, discovery, holder checks) so replays are exact."""
