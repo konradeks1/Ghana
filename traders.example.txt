@@ -1,0 +1,5 @@
+# Optional bootstrap list: one Solana wallet per line (copy to traders.txt).
+# Used to fill the 25 follow slots until the live leaderboard has ranked
+# enough profitable wallets on its own. Paste wallets you've vetted on
+# e.g. a Pump.fun / GMGN / Birdeye top-traders page.
+# ExampleWa11etAddressGoesHere1111111111111111
