@@ -14,6 +14,31 @@ are making the most money right now** (see [Ensemble](#ensemble-all-tactics-toge
 To run one tactic on its own, use `STRATEGY=scalp TACTIC=<name>`. Copy trading
 is still available with `STRATEGY=copy`.
 
+## Established coins ($25k+ market cap)
+
+The ensemble trades **coins that are already worth $25k+** by default
+(`ENSEMBLE_TACTICS=est`). With SOL at ~$93 that's ~270 SOL market cap. Coins
+graduate from the bonding curve to PumpSwap at ~$38k, so this covers the last
+stretch of the curve and coins that already graduated.
+
+- **Where the coins come from:**
+  - **The launch feed:** coins the bot has watched since launch, once they
+    pass $25k. These keep their full launch history, so every rug check
+    applies.
+  - **DexScreener:** active Pump.fun and PumpSwap coins (at least $10k volume
+    in the last hour, 20+ trades in the last 5 minutes, enough liquidity).
+    Their socials come from DexScreener, so a coin still needs a website, X or
+    Instagram link.
+- **Holder check for coins found mid-life:** their top holders are looked up
+  through your Solana RPC, so whale-heavy coins are skipped.
+  - This needs an RPC that allows `getTokenLargestAccounts`, such as the
+    Helius free tier. The public mainnet RPC blocks it.
+  - With `REQUIRE_HOLDER_CHECK=true` (the default) and no working RPC, coins
+    found on DexScreener are never bought.
+- **Seven est_* tactics:** momentum, runner, breakout, dip, volume, calm, and
+  graduation (the $25k–$42k run-up before graduation). They use a tighter stop
+  (−8%), a longer hold (5 min), and re-entries every 2 minutes.
+
 ## Ensemble: all tactics together
 
 - **Background tactics:** every tactic watches every new coin and trades on its
