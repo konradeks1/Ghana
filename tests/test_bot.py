@@ -47,7 +47,13 @@ class FakeFeed:
 
 
 def cfg(tmp_path=None, **kw):
-    c = Config(seed_traders_file="", state_file=str(tmp_path / "s.json") if tmp_path else "s.json")
+    c = Config(
+        seed_traders_file="",
+        state_file=str(tmp_path / "s.json") if tmp_path else "s.json",
+        paper_latency_sec=0,
+        paper_slippage_pct=0,
+        min_median_hold_sec=0,
+    )
     for k, v in kw.items():
         setattr(c, k, v)
     return c
@@ -217,6 +223,7 @@ def test_end_to_end_copy_trade_takes_profit(tmp_path):
 
         # 2) pro buys a fresh token -> bot analyses and copies
         await bot.handle(msg("pro", "MOON", "buy", 1.0, 1000, 1e-6, "entry"))
+        await bot.drain()
         assert "MOON" in bot.positions.open
         entry = bot.positions.open["MOON"].entry_price
 
@@ -231,6 +238,7 @@ def test_end_to_end_copy_trade_takes_profit(tmp_path):
 
         # 4) price falls >10% from the +80% peak -> trailing stop sells
         await bot.handle(msg("rando", "MOON", "sell", 2.0, 1000, entry * 1.6, "dump"))
+        await bot.drain()
         assert "MOON" not in bot.positions.open
         trade = bot.positions.closed[-1]
         assert trade.reason.startswith("runner trailing-stop")
@@ -251,9 +259,172 @@ def test_leader_sell_triggers_exit(tmp_path):
 
     async def scenario():
         await bot.handle(msg("pro", "M", "buy", 1.0, 1000, 1e-6, "a"))
+        await bot.drain()
         assert "M" in bot.positions.open
         await bot.handle(msg("pro", "M", "sell", 1.0, 1000, 1.05e-6, "b"))
+        await bot.drain()
         assert "M" not in bot.positions.open
         assert "leader" in bot.positions.closed[-1].reason
 
     asyncio.run(scenario())
+
+
+# ------------------------------------------------------- scalper filter
+def test_scalpers_are_not_followed():
+    lb = Leaderboard(min_round_trips=2, min_median_hold_sec=120)
+    for i in range(3):
+        # scalper: flips in 5s; swing: holds 10 min. Both profitable.
+        lb.on_trade(evt("scalper", f"a{i}", "buy", 1.0, 1000, 1e-3, 100 * i))
+        lb.on_trade(evt("scalper", f"a{i}", "sell", 1.5, 1000, 1e-3, 100 * i + 5))
+        lb.on_trade(evt("swing", f"b{i}", "buy", 1.0, 1000, 1e-3, 100 * i))
+        lb.on_trade(evt("swing", f"b{i}", "sell", 1.3, 1000, 1e-3, 100 * i + 600))
+    assert [s.wallet for s in lb.top(25, now=2000)] == ["swing"]
+
+
+# --------------------------------------------------------- paper realism
+def test_paper_fills_at_price_after_latency():
+    c = cfg(paper_latency_sec=1.5, paper_slippage_pct=3, slippage_pct=10)
+    market = {"m": 1.05}
+    slept = []
+
+    async def fake_sleep(t):
+        slept.append(t)
+
+    ex = PaperExecutor(c, price_fn=market.get, sleep=fake_sleep)
+    fill = asyncio.run(ex.buy("m", 0.1, 1.0))
+    assert slept == [1.5]
+    assert fill.ok and fill.price > 1.05 * 1.03  # market moved + impact + fees
+
+    market["m"] = 1.2  # +20% during latency > 10% slippage limit
+    assert not asyncio.run(ex.buy("m", 0.1, 1.0)).ok
+
+    market["m"] = 0.8  # crash during latency: sell fails like a real one would
+    bad = asyncio.run(ex.sell("m", 100, 1.0))
+    assert not bad.ok and "slippage" in bad.error
+
+
+def test_failed_sell_is_retried(tmp_path):
+    c = cfg(tmp_path)
+
+    class FlakyPaper(PaperExecutor):
+        fails = 1
+
+        async def sell(self, mint, tokens, price):
+            if self.fails:
+                self.fails -= 1
+                from pumpbot.executor import Fill
+                return Fill(False, 0, tokens, price, error="boom")
+            return await super().sell(mint, tokens, price)
+
+    bot = CopyTradeBot(c, FlakyPaper(c), feed=FakeFeed(), clock=lambda: 50.0)
+    _proven_trader(bot.leaderboard, "pro")
+    bot.followed = {"pro"}
+
+    async def scenario():
+        await bot.handle(msg("pro", "M", "buy", 1.0, 1000, 1e-6, "a"))
+        await bot.drain()
+        await bot.handle(msg("x", "M", "sell", 1.0, 1000, 0.5e-6, "crash"))
+        await bot.drain()
+        assert "M" in bot.positions.open and "M" in bot._exit_retry
+        await bot.tick()
+        await bot.drain()
+        assert "M" not in bot.positions.open and not bot._exit_retry
+
+    asyncio.run(scenario())
+
+
+def test_max_positions_counts_in_flight_buys(tmp_path):
+    c = cfg(tmp_path, max_open_positions=1, paper_latency_sec=0.05)
+    bot = CopyTradeBot(c, PaperExecutor(c), feed=FakeFeed(), clock=lambda: 50.0)
+    _proven_trader(bot.leaderboard, "pro")
+    bot.followed = {"pro"}
+
+    async def scenario():
+        await bot.handle(msg("pro", "A", "buy", 1.0, 1000, 1e-6, "a"))
+        await bot.handle(msg("pro", "B", "buy", 1.0, 1000, 1e-6, "b"))  # A still in flight
+        await bot.drain()
+        assert set(bot.positions.open) == {"A"}
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------- live confirmation
+def _live_executor(rpc_handler, send_result=("SIG", "")):
+    from solders.keypair import Keypair
+    from pumpbot.executor import PumpPortalExecutor
+
+    ex = PumpPortalExecutor.__new__(PumpPortalExecutor)
+    ex.cfg = cfg(confirm_timeout_sec=3)
+    ex.keypair = Keypair()
+    ex.pubkey = str(ex.keypair.pubkey())
+
+    async def no_sleep(_):
+        pass
+
+    async def fake_send(*a, **k):
+        return send_result
+
+    async def fake_rpc(method, params):
+        return rpc_handler(method, params)
+
+    ex._sleep, ex._send, ex._rpc = no_sleep, fake_send, fake_rpc
+    return ex
+
+
+def _token_accounts(amount):
+    info = {"tokenAmount": {"uiAmountString": str(amount)}}
+    return {"value": [{"account": {"data": {"parsed": {"info": info}}}}]}
+
+
+def test_live_buy_uses_confirmed_onchain_amounts():
+    balances = iter([0, 123456.0])
+
+    def rpc(method, params):
+        if method == "getTokenAccountsByOwner":
+            return _token_accounts(next(balances))
+        if method == "getSignatureStatuses":
+            return {"value": [{"confirmationStatus": "confirmed", "err": None}]}
+        if method == "getTransaction":
+            return {"meta": {"preBalances": [1_000_000_000], "postBalances": [895_000_000]}}
+
+    fill = asyncio.run(_live_executor(rpc).buy("m", 0.1, 1e-6))
+    assert fill.ok and fill.tokens == 123456.0
+    assert fill.sol == pytest.approx(0.105)  # real cost incl. fees
+    assert fill.price == pytest.approx(0.105 / 123456.0)
+
+
+def test_live_buy_failed_onchain_is_not_a_position():
+    def rpc(method, params):
+        if method == "getTokenAccountsByOwner":
+            return _token_accounts(0)
+        if method == "getSignatureStatuses":
+            return {"value": [{"confirmationStatus": "processed", "err": {"InstructionError": [3, {"Custom": 6003}]}}]}
+
+    fill = asyncio.run(_live_executor(rpc).buy("m", 0.1, 1e-6))
+    assert not fill.ok and "failed on-chain" in fill.error
+
+
+def test_live_buy_timeout_without_tokens_fails():
+    def rpc(method, params):
+        if method == "getTokenAccountsByOwner":
+            return _token_accounts(0)
+        if method == "getSignatureStatuses":
+            return {"value": [None]}
+
+    fill = asyncio.run(_live_executor(rpc).buy("m", 0.1, 1e-6))
+    assert not fill.ok and fill.error == "no tokens received"
+
+
+def test_live_sell_reports_real_proceeds():
+    balances = iter([5000.0, 0.0])
+
+    def rpc(method, params):
+        if method == "getTokenAccountsByOwner":
+            return _token_accounts(next(balances))
+        if method == "getSignatureStatuses":
+            return {"value": [{"confirmationStatus": "finalized", "err": None}]}
+        if method == "getTransaction":
+            return {"meta": {"preBalances": [1_000_000_000], "postBalances": [1_118_000_000]}}
+
+    fill = asyncio.run(_live_executor(rpc).sell("m", 5000.0, 2e-5))
+    assert fill.ok and fill.sol == pytest.approx(0.118)

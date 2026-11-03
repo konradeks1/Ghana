@@ -52,10 +52,10 @@ class PositionManager:
         day_start = now - (now % 86400)
         return sum(t.pnl_sol for t in self.closed if t.closed_at >= day_start)
 
-    def can_open(self, mint: str, now: float, balance_sol: float) -> tuple[bool, str]:
+    def can_open(self, mint: str, now: float, balance_sol: float, pending: int = 0) -> tuple[bool, str]:
         if mint in self.open:
             return False, "already holding"
-        if len(self.open) >= self.cfg.max_open_positions:
+        if len(self.open) + pending >= self.cfg.max_open_positions:
             return False, "max open positions"
         if now - self.last_trade_at.get(mint, -1e18) < self.cfg.mint_cooldown_sec:
             return False, "mint cooldown"

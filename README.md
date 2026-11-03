@@ -36,7 +36,10 @@ PumpPortal websocket ──► new tokens ──► all trades on fresh tokens
    (the newest 400 at a time) and records every buy and sell. Each wallet gets
    realised PnL on an average-cost basis, plus closed round trips with return
    and hold time. Wallets are ranked by realised profit over the last 24h. Only
-   wallets with at least 3 closed trades and positive PnL qualify. The top 25
+   wallets with at least 3 closed trades and positive PnL qualify. **Scalpers
+   are skipped:** a wallet whose median hold is under 2 minutes
+   (`MIN_MEDIAN_HOLD_SEC`) flips faster than a copy can land, so it isn't
+   followed. The top 25
    are re-ranked every 5 minutes. While the board warms up, any wallets in
    `traders.txt` fill the empty slots.
 2. **Entry back-testing (`outcomes.py`)** – Every buy by a followed trader is
@@ -53,10 +56,19 @@ PumpPortal websocket ──► new tokens ──► all trades on fresh tokens
 
    It then computes `EV = p·TP − (1−p)·SL − fees`. It enters only when
    `p ≥ 0.55` and `EV ≥ +3%`. Every decision is logged with its reasons.
-4. **Execution (`executor.py`)** – Paper mode simulates fills with fees and
-   slippage. Live mode asks PumpPortal's `trade-local` API to build the
-   transaction, signs it **locally** (your key never leaves your machine) and
-   sends it through your RPC.
+4. **Execution (`executor.py`)**
+   - *Live:* PumpPortal's `trade-local` API builds the transaction. The bot
+     signs it **locally** (your key never leaves your machine) and sends it
+     through your RPC. Then it **waits for on-chain confirmation** and reads
+     the **real** token balance and SOL change from the chain. A buy that fails
+     or never lands doesn't become a position. A sell that fails is retried
+     every few seconds.
+   - *Paper:* fills are made realistic. The simulated fill happens 1.5 s after
+     the decision, at the market price *at that moment*. If price moved more
+     than `SLIPPAGE_PCT` in that time, the order fails like a real one would.
+     Every fill also costs 3% price impact plus fees.
+   - Orders run in the background, so the bot keeps reading the feed while
+     it waits for a confirmation.
 5. **Exits and risk (`positions.py`)**
    - *Before +20%:* stop loss at −12%, close after 20 minutes, and exit if the
      leader sells.
@@ -113,16 +125,20 @@ All knobs are in `.env.example`. The most important ones:
 | `BUY_AMOUNT_SOL` | 0.1 | size per trade |
 | `MAX_DAILY_LOSS_SOL` | 0.5 | stop opening trades for the day after this loss |
 
-The +20% is measured on token price. After Pump.fun's 1% fee on each side,
-slippage and priority fees, a trade that closes at the +20% floor nets roughly
-**+15–17%**. Raise `TP_FLOOR_PCT` to about 25 if you want **+20% net**.
+The +20% is measured from your **real cost per token**, which includes the
+buy fee, slippage and priority fee. A trade that closes at the +20% floor
+still pays the sell fee and slippage, so it nets roughly **+15–18%**. Raise
+`TP_FLOOR_PCT` to about 24 if you want **+20% net**.
 
 ## Known limits
 - The leaderboard only sees trades on tokens tracked since the bot started. A
   wallet's sells of tokens bought earlier are ignored. Rankings get better the
   longer the bot runs.
-- In live mode, token amounts and sale proceeds are **estimated** from price.
-  Sells always send `100%` of the balance, so positions close fully.
+- If a live buy isn't confirmed within `CONFIRM_TIMEOUT_SEC` and no tokens
+  have arrived, the bot treats it as failed. It logs a warning, because the
+  transaction could still land later. Check the wallet if you see that warning.
+- The stop loss and the +20% floor are triggers, not guaranteed prices. When a
+  token crashes in one trade, the sell fills at the next available price.
 - Copy trading has latency. The chase filter limits it but cannot remove it.
 
 ## Tests

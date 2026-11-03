@@ -25,7 +25,9 @@ class CopyTradeBot:
         self.executor = executor
         self.feed = feed
         self.clock = clock
-        self.leaderboard = Leaderboard(cfg.leaderboard_window_hours, cfg.min_round_trips, cfg.exclude_wallets)
+        self.leaderboard = Leaderboard(
+            cfg.leaderboard_window_hours, cfg.min_round_trips, cfg.exclude_wallets, cfg.min_median_hold_sec
+        )
         self.outcomes = EntryOutcomeTracker(cfg.take_profit_pct, cfg.stop_loss_pct, cfg.outcome_horizon_sec)
         self.analyzer = EntryAnalyzer(cfg, self.leaderboard)
         self.positions = PositionManager(cfg)
@@ -34,7 +36,12 @@ class CopyTradeBot:
         self.seed_traders: list[str] = self._load_seeds()
         self.tracked_tokens: OrderedDict[str, float] = OrderedDict()  # discovery set
         self._seen_sigs: OrderedDict[str, None] = OrderedDict()
-        self._busy: set[str] = set()
+        self._busy: set[str] = set()  # mints with an order in flight
+        self._buying: set[str] = set()
+        self._exit_retry: dict[str, str] = {}  # mint -> reason, for failed sells
+        self._tasks: set[asyncio.Task] = set()
+        if hasattr(executor, "price_fn"):  # paper fills use the price *after* latency
+            executor.price_fn = self.prices.get
 
     # ------------------------------------------------------------------ setup
     def _load_seeds(self) -> list[str]:
@@ -76,8 +83,11 @@ class CopyTradeBot:
         for w in self.seed_traders:  # fill remaining slots while the board warms up
             if len(followed) >= self.cfg.top_n_traders:
                 break
-            if w not in followed and w not in self.cfg.exclude_wallets:
-                followed.append(w)
+            if w in followed or w in self.cfg.exclude_wallets:
+                continue
+            if w in self.leaderboard.wallets and self.leaderboard.is_scalper(self.leaderboard.wallets[w], now):
+                continue
+            followed.append(w)
         changed = set(followed) != self.followed
         self.followed = set(followed)
         if self.feed:
@@ -87,8 +97,9 @@ class CopyTradeBot:
             log.info("following %d traders (%d ranked)", len(self.followed), len(top))
             for i, s in enumerate(top[:10], 1):
                 log.info(
-                    "  #%d %s… pnl=%+.2f SOL trips=%d win=%.0f%% copy-hits=%d/%d",
+                    "  #%d %s… pnl=%+.2f SOL trips=%d win=%.0f%% hold=%.0fs copy-hits=%d/%d",
                     i, s.wallet[:8], s.pnl(since), len(s.trips(since)), s.win_rate(since) * 100,
+                    s.median_hold(since),
                     s.copy_hits, s.copy_hits + s.copy_misses,
                 )
 
@@ -169,44 +180,72 @@ class CopyTradeBot:
         log.info("signal %s… from %s…: %s", evt.mint[:8], evt.trader[:6], sig.summary())
         if not sig.approved or evt.mint in self._busy:
             return
-        ok, why = self.positions.can_open(evt.mint, evt.timestamp, await self.executor.balance())
+        ok, why = self.positions.can_open(
+            evt.mint, evt.timestamp, await self.executor.balance(), pending=len(self._buying)
+        )
         if not ok:
             log.info("  not entering: %s", why)
             return
         self._busy.add(evt.mint)
+        self._buying.add(evt.mint)
+        self._spawn(self._do_buy(evt.mint, sig))
+
+    # ------------------------------------------------------------ orders
+    def _spawn(self, coro) -> None:
+        """Orders run as tasks so the feed keeps flowing while we wait for confirmation."""
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def drain(self) -> None:
+        while self._tasks:
+            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+
+    async def _do_buy(self, mint: str, sig) -> None:
         try:
-            fill = await self.executor.buy(evt.mint, self.cfg.buy_amount_sol, sig.current_price)
+            fill = await self.executor.buy(mint, self.cfg.buy_amount_sol, self.prices.get(mint, sig.current_price))
             if not fill.ok:
-                log.error("  buy failed: %s", fill.error)
+                log.warning("  buy %s… failed: %s", mint[:8], fill.error)
+                self.positions.last_trade_at[mint] = self.clock()  # don't hammer a failing mint
                 return
-            self.positions.add(
-                Position(evt.mint, fill.price, fill.sol, fill.tokens, self.clock(), sig.leaders, sig.probability)
-            )
+            self.positions.add(Position(mint, fill.price, fill.sol, fill.tokens, self.clock(), sig.leaders, sig.probability))
             log.info(
-                "BUY %s %.3f SOL @ %.3e (TP %.3e / SL %.3e) tx=%s",
-                evt.mint, fill.sol, fill.price,
+                "BUY %s %.4f SOL -> %.0f tokens @ %.3e (signal %.3e, TP %.3e / SL %.3e) tx=%s",
+                mint, fill.sol, fill.tokens, fill.price, sig.current_price,
                 fill.price * (1 + self.cfg.take_profit_pct / 100),
                 fill.price * (1 - self.cfg.stop_loss_pct / 100), fill.signature,
             )
+        except Exception:
+            log.exception("buy %s… crashed", mint[:8])
         finally:
-            self._busy.discard(evt.mint)
+            self._busy.discard(mint)
+            self._buying.discard(mint)
 
     async def _exit(self, mint: str, reason: str) -> None:
-        pos = self.positions.open.get(mint)
-        if pos is None or mint in self._busy:
+        if mint not in self.positions.open or mint in self._busy:
             return
         self._busy.add(mint)
+        self._spawn(self._do_exit(mint, reason))
+
+    async def _do_exit(self, mint: str, reason: str) -> None:
         try:
-            price = self.prices.get(mint, pos.last_price)
-            fill = await self.executor.sell(mint, pos.tokens, price)
-            if not fill.ok:
-                log.error("sell %s failed: %s (will retry)", mint[:8], fill.error)
+            pos = self.positions.open.get(mint)
+            if pos is None:
                 return
+            fill = await self.executor.sell(mint, pos.tokens, self.prices.get(mint, pos.last_price))
+            if not fill.ok:
+                log.warning("sell %s… failed: %s (will retry)", mint[:8], fill.error)
+                self._exit_retry[mint] = reason
+                return
+            self._exit_retry.pop(mint, None)
             trade = self.positions.close(mint, fill.sol, self.clock(), reason)
             log.info(
                 "SELL %s… %s pnl=%+.4f SOL (%+.1f%%) tx=%s",
                 mint[:8], reason, trade.pnl_sol, trade.pnl_sol / trade.sol_in * 100, fill.signature,
             )
+        except Exception:
+            log.exception("sell %s… crashed (will retry)", mint[:8])
+            self._exit_retry[mint] = reason
         finally:
             self._busy.discard(mint)
 
@@ -215,6 +254,8 @@ class CopyTradeBot:
         now = self.clock()
         for wallet, _ in self.outcomes.expire(now):
             self.leaderboard.get(wallet).copy_misses += 1
+        for mint, reason in list(self._exit_retry.items()):
+            await self._exit(mint, reason)
         for mint in list(self.positions.open):
             reason = self.positions.exit_reason(mint, 0.0, now)
             if reason:
@@ -261,5 +302,6 @@ class CopyTradeBot:
         finally:
             self.feed.stop()
             feed_task.cancel()
+            await self.drain()
             self.save_state()
             await self.executor.close()

@@ -46,6 +46,7 @@ class Config:
     top_n_traders: int = 25
     leaderboard_window_hours: float = 24.0
     min_round_trips: int = 3  # a wallet needs this many closed trades to rank
+    min_median_hold_sec: float = 120.0  # skip scalpers that flip faster than we can copy
     leaderboard_refresh_sec: int = 300
     max_tracked_tokens: int = 400  # how many fresh tokens we scan for traders
     seed_traders_file: str = "traders.txt"  # optional bootstrap wallets
@@ -82,6 +83,11 @@ class Config:
     priority_fee_sol: float = 0.0005
     fee_pct: float = 1.0  # pump.fun fee per side
     pool: str = "auto"
+    confirm_timeout_sec: float = 45.0  # live: wait this long for on-chain confirmation
+
+    # --- paper realism ------------------------------------------------------
+    paper_latency_sec: float = 1.5  # delay between decision and simulated fill
+    paper_slippage_pct: float = 3.0  # extra price impact on every simulated fill
 
     state_file: str = "state.json"
     log_level: str = "INFO"
@@ -111,6 +117,7 @@ class Config:
             top_n_traders=_int("TOP_N_TRADERS", 25),
             leaderboard_window_hours=_float("LEADERBOARD_WINDOW_HOURS", 24.0),
             min_round_trips=_int("MIN_ROUND_TRIPS", 3),
+            min_median_hold_sec=_float("MIN_MEDIAN_HOLD_SEC", 120.0),
             leaderboard_refresh_sec=_int("LEADERBOARD_REFRESH_SEC", 300),
             max_tracked_tokens=_int("MAX_TRACKED_TOKENS", 400),
             seed_traders_file=_env("SEED_TRADERS_FILE", "traders.txt"),
@@ -140,6 +147,9 @@ class Config:
             priority_fee_sol=_float("PRIORITY_FEE_SOL", 0.0005),
             fee_pct=_float("FEE_PCT", 1.0),
             pool=_env("POOL", "auto"),
+            confirm_timeout_sec=_float("CONFIRM_TIMEOUT_SEC", 45.0),
+            paper_latency_sec=_float("PAPER_LATENCY_SEC", 1.5),
+            paper_slippage_pct=_float("PAPER_SLIPPAGE_PCT", 3.0),
             state_file=_env("STATE_FILE", "state.json"),
             log_level=_env("LOG_LEVEL", "INFO"),
         )
