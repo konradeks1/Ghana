@@ -221,6 +221,12 @@ class BaseBot:
         return ""
 
     async def maintenance(self) -> None:
+        if getattr(self.feed, "trade_data_blocked", False):
+            self.log.error(
+                "NO TRADE DATA: PumpPortal refuses trade streams because the API key's wallet has "
+                "less than 0.02 SOL. Top it up (pumpportal.fun) - until then the bot sees new coins "
+                "but no trades, so it cannot trade."
+            )
         self.save_state()
         st = self.positions.stats()
         self.log.info(

@@ -33,6 +33,7 @@ class FeedProxy:
 class NullFeed:
     def __init__(self):
         self.tokens: set[str] = set()
+        self.trade_data_blocked = False
 
     async def subscribe_tokens(self, m):
         pass

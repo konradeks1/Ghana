@@ -25,6 +25,7 @@ class PumpPortalFeed:
         self._ws = None
         self._stop = asyncio.Event()
         self._notices: set[str] = set()
+        self.trade_data_blocked = False  # PumpPortal refused trade streams (key unfunded)
 
     async def _send(self, method: str, keys: Iterable[str] | None = None) -> None:
         if self._ws is None:
@@ -76,6 +77,8 @@ class PumpPortalFeed:
                             continue
                         if isinstance(msg, dict) and "message" in msg and "txType" not in msg:
                             note = str(msg["message"])
+                            if "only available when connecting with an API key" in note:
+                                self.trade_data_blocked = True
                             if note not in self._notices:
                                 self._notices.add(note)
                                 level = logging.INFO if note.lower().startswith("success") else logging.WARNING

@@ -236,6 +236,9 @@ async def run(
                 await b.tick()
             if time.time() - last_report >= 60:
                 last_report = time.time()
+                if mux.feed.trade_data_blocked:
+                    log.error("NO TRADE DATA: PumpPortal API key's wallet has < 0.02 SOL; top it up. "
+                              "Results from this run are meaningless until then.")
                 rows = [summarize(n, b, tactics.get(n, {})) for n, b in zip(names, mux.bots)]
                 log.info("after %.0f min (%d msgs):\n%s", (time.time() - start) / 60, mux.messages, table(rows))
                 with open(os.path.join(out_dir, "results.json"), "w") as f:  # interim, survives a crash
