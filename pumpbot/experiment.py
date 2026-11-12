@@ -83,6 +83,10 @@ def dump_metadata(socials: SocialsChecker, path: str) -> None:
         json.dump(existing, f)
 
 
+# set when a run starts: SOL/USD used to value every bot's $ balance
+USD = {"sol": 0.0, "start": 0.0}
+
+
 def summarize(name: str, bot: ScalperBot, overrides: dict) -> dict:
     closed = bot.positions.closed
     pnls = [t.pnl_sol for t in closed]
@@ -96,6 +100,10 @@ def summarize(name: str, bot: ScalperBot, overrides: dict) -> dict:
         "wins": sum(1 for p in pnls if p > 0),
         "win_rate": (sum(1 for p in pnls if p > 0) / len(pnls)) if pnls else 0.0,
         "pnl_sol": sum(pnls),
+        "sol_usd": USD["sol"],
+        "start_usd": USD["start"],
+        "pnl_usd": sum(pnls) * USD["sol"],
+        "end_usd": USD["start"] + sum(pnls) * USD["sol"],
         "avg_pct": statistics.mean(pcts) if pcts else 0.0,
         "best_pct": max(pcts) if pcts else 0.0,
         "worst_pct": min(pcts) if pcts else 0.0,
@@ -114,14 +122,28 @@ def summarize(name: str, bot: ScalperBot, overrides: dict) -> dict:
 
 def table(rows: list[dict]) -> str:
     rows = sorted(rows, key=lambda r: r["pnl_sol"], reverse=True)
-    out = [f"{'tactic':<14}{'trades':>7}{'win%':>7}{'pnl SOL':>10}{'avg %':>8}{'best %':>8}{'worst %':>9}  exits"]
+    usd = any(r.get("start_usd") for r in rows)
+    money = f"{'$ start -> end':>17}{'pnl $':>9}" if usd else ""
+    out = [f"{'tactic':<14}{'trades':>7}{'win%':>7}{'pnl SOL':>10}{money}{'avg %':>8}{'best %':>8}{'worst %':>9}  exits"]
     for r in rows:
         exits = ", ".join(f"{k}×{v}" for k, v in sorted(r["exit_reasons"].items(), key=lambda kv: -kv[1]))
+        m = f"{r['start_usd']:>8.2f} -> {r['end_usd']:>6.2f}{r['pnl_usd']:>+9.2f}" if usd else ""
         out.append(
-            f"{r['tactic']:<14}{r['trades']:>7}{r['win_rate'] * 100:>6.0f}%{r['pnl_sol']:>+10.4f}"
+            f"{r['tactic']:<14}{r['trades']:>7}{r['win_rate'] * 100:>6.0f}%{r['pnl_sol']:>+10.4f}{m}"
             f"{r['avg_pct']:>+8.1f}{r['best_pct']:>+8.1f}{r['worst_pct']:>+9.1f}  {exits}"
         )
     return "\n".join(out)
+
+
+def _set_usd_balances(mux, base, sol_usd: float) -> None:
+    """Give every paper bot PAPER_BALANCE_USD worth of SOL."""
+    USD["sol"] = sol_usd
+    if base.paper_balance_usd <= 0 or sol_usd <= 0:
+        return
+    USD["start"] = base.paper_balance_usd
+    for b in mux.bots:
+        if hasattr(b.executor, "balance_sol"):
+            b.executor.balance_sol = base.paper_balance_usd / sol_usd
 
 
 def _build(mux, names, tactics, base, out_dir, socials, clock=time.time, sleep=asyncio.sleep, market=None):
@@ -173,6 +195,8 @@ async def replay(
     socials = RecordedSocials(meta)
     market = MarketData(base, offline=True)
     _build(mux, names, tactics, base, out_dir, socials, clock=clock.time, sleep=clock.sleep, market=market)
+    first_sol = next((e["x"]["sol_usd"] for e in events if "x" in e and "sol_usd" in e["x"]), base.sol_price_usd)
+    _set_usd_balances(mux, base, first_sol)
     if ensemble:
         _add_ensemble(mux, base, out_dir, clock.time, clock.sleep, socials, extra, market)
         names = names + ["ENSEMBLE"]
@@ -220,6 +244,11 @@ async def run(
     socials = SocialsChecker(base.ipfs_gateways)
     market = MarketData(base, recorder=mux.record_extra if record else None)
     _build(mux, names, tactics, base, out_dir, socials, market=market)
+    sol_usd = await market.sol.refresh(time.time())
+    _set_usd_balances(mux, base, sol_usd)
+    if USD["start"]:
+        logging.getLogger("pumpbot.experiment").info(
+            "each bot starts with $%.2f = %.4f SOL (SOL = $%.2f)", USD["start"], USD["start"] / sol_usd, sol_usd)
     if ensemble:
         _add_ensemble(mux, base, out_dir, socials=socials, extra=extra, market=market)
         names = names + ["ENSEMBLE"]

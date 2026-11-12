@@ -39,6 +39,7 @@ class Config:
     strategy: str = "ensemble"  # "ensemble" (all tactics, best ones trade), "scalp" or "copy"
     dry_run: bool = True  # paper trading unless explicitly disabled
     paper_balance_sol: float = 5.0
+    paper_balance_usd: float = 0.0  # when set, each paper bot starts with this many dollars of SOL
 
     # --- endpoints / wallet ----------------------------------------------
     # where live trades come from: "solana" (free, decoded from on-chain program logs)
@@ -262,6 +263,7 @@ class Config:
             scalp_dip_window_sec=_float("SCALP_DIP_WINDOW_SEC", 180.0),
             dry_run=_bool("DRY_RUN", True),
             paper_balance_sol=_float("PAPER_BALANCE_SOL", 5.0),
+            paper_balance_usd=_float("PAPER_BALANCE_USD", 0.0),
             data_source=_env("DATA_SOURCE", "solana").lower(),
             solana_ws_url=_env("SOLANA_WS_URL", cls.solana_ws_url),
             ws_url=_env("WS_URL", cls.ws_url),
