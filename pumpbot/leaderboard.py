@@ -55,8 +55,8 @@ class WalletStats:
     def median_buy(self) -> float:
         return statistics.median(self.buy_sizes) if self.buy_sizes else 0.0
 
-    def median_hold(self) -> float:
-        holds = [h for _, _, h in self.round_trips]
+    def median_hold(self, since: float = 0.0) -> float:
+        holds = [h for ts, _, h in self.round_trips if ts >= since]
         return statistics.median(holds) if holds else 0.0
 
     # ---- persistence ----------------------------------------------------------
@@ -84,9 +84,16 @@ class WalletStats:
 
 
 class Leaderboard:
-    def __init__(self, window_hours: float = 24.0, min_round_trips: int = 3, exclude: set[str] | None = None):
+    def __init__(
+        self,
+        window_hours: float = 24.0,
+        min_round_trips: int = 3,
+        exclude: set[str] | None = None,
+        min_median_hold_sec: float = 0.0,
+    ):
         self.window_sec = window_hours * 3600
         self.min_round_trips = min_round_trips
+        self.min_median_hold_sec = min_median_hold_sec
         self.exclude = exclude or set()
         self.wallets: dict[str, WalletStats] = {}
 
@@ -152,9 +159,19 @@ class Leaderboard:
             if s.wallet not in self.exclude
             and len(s.trips(since)) >= self.min_round_trips
             and s.pnl(since) > 0
+            and not self.is_scalper(s, now)
         ]
         ranked.sort(key=lambda s: s.pnl(since), reverse=True)
         return ranked[:n]
+
+    def is_scalper(self, s: WalletStats, now: float) -> bool:
+        """Wallets that usually flip within seconds can't be copied in time."""
+        if self.min_median_hold_sec <= 0:
+            return False
+        since = now - self.window_sec
+        if len(s.trips(since)) < self.min_round_trips:
+            return False  # not enough evidence either way
+        return s.median_hold(since) < self.min_median_hold_sec
 
     def to_dict(self) -> dict[str, Any]:
         return {w: s.to_dict() for w, s in self.wallets.items() if s.realized or s.copy_hits or s.copy_misses}
