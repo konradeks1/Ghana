@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 
-from .feed import PumpPortalFeed
+from .feed import make_feed
 
 
 class FeedProxy:
@@ -43,10 +43,10 @@ class NullFeed:
 
 
 class FeedMux:
-    def __init__(self, url: str | None, record_path: str | None = None):
+    def __init__(self, cfg=None, record_path: str | None = None):
         self.bots: list = []
         self.proxies: list[FeedProxy] = []
-        self.feed = PumpPortalFeed(url, self.handle) if url else NullFeed()
+        self.feed = make_feed(cfg, self.handle) if cfg is not None else NullFeed()
         self.messages = 0
         self._rec = open(record_path, "a", buffering=1) if record_path else None  # line-buffered: safe if killed
 

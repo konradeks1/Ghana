@@ -16,6 +16,15 @@ log = logging.getLogger(__name__)
 Handler = Callable[[dict], Awaitable[None]]
 
 
+def make_feed(cfg, handler):
+    """The live data feed chosen by DATA_SOURCE."""
+    if cfg.data_source == "pumpportal":
+        return PumpPortalFeed(cfg.ws_endpoint, handler)
+    from .solfeed import SolanaLogFeed
+
+    return SolanaLogFeed(cfg.solana_ws_url, cfg.rpc_url, handler)
+
+
 class PumpPortalFeed:
     def __init__(self, url: str, handler: Handler):
         self.url = url

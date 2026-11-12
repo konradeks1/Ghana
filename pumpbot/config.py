@@ -41,6 +41,10 @@ class Config:
     paper_balance_sol: float = 5.0
 
     # --- endpoints / wallet ----------------------------------------------
+    # where live trades come from: "solana" (free, decoded from on-chain program logs)
+    # or "pumpportal" (needs an API key whose wallet holds >= 0.02 SOL)
+    data_source: str = "solana"
+    solana_ws_url: str = "wss://api.mainnet-beta.solana.com"
     ws_url: str = "wss://pumpportal.fun/api/data"
     trade_url: str = "https://pumpportal.fun/api/trade-local"
     rpc_url: str = "https://api.mainnet-beta.solana.com"
@@ -258,6 +262,8 @@ class Config:
             scalp_dip_window_sec=_float("SCALP_DIP_WINDOW_SEC", 180.0),
             dry_run=_bool("DRY_RUN", True),
             paper_balance_sol=_float("PAPER_BALANCE_SOL", 5.0),
+            data_source=_env("DATA_SOURCE", "solana").lower(),
+            solana_ws_url=_env("SOLANA_WS_URL", cls.solana_ws_url),
             ws_url=_env("WS_URL", cls.ws_url),
             trade_url=_env("TRADE_URL", cls.trade_url),
             rpc_url=_env("RPC_URL", cls.rpc_url),

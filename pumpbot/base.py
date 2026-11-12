@@ -242,16 +242,16 @@ class BaseBot:
         raise NotImplementedError
 
     async def run(self) -> None:
-        from .feed import PumpPortalFeed
+        from .feed import make_feed
 
         self.load_state()
-        if not self.cfg.api_key:
+        if self.cfg.data_source == "pumpportal" and not self.cfg.api_key:
             self.log.warning(
                 "PUMPPORTAL_API_KEY not set: PumpPortal only streams new-token events without a "
                 "funded API key, so trades cannot be watched. See README."
             )
         if self.feed is None:
-            self.feed = PumpPortalFeed(self.cfg.ws_endpoint, self.handle)
+            self.feed = make_feed(self.cfg, self.handle)
         await self.feed.subscribe_tokens(self.positions.open)
         await self.on_start()
         feed_task = asyncio.create_task(self.feed.run())

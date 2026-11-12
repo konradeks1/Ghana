@@ -153,3 +153,14 @@ TACTICS.update({
                            scalp_min_unique_traders=10, scalp_min_buy_ratio=0.6, scalp_min_net_inflow_sol=1.0,
                            scalp_min_score=40),
 })
+
+# ---------------------------------------------------------------------------
+# The three bots. Each starts from the tactic that backtested best on all
+# recorded live data so far (version 1), and is replaced by a better version
+# when a paper run shows it losing.
+BOTS: dict[str, dict] = {
+    "bot1_sniper": dict(TACTICS["early_bird_loose"]),  # new coins aged 3-90 s
+    "bot2_breakout": dict(TACTICS["est_breakout"]),  # established $25k+ coins at a fresh high
+    "bot3_volume": dict(TACTICS["volume_hunter"]),  # new coins with the most trading
+}
+TACTICS.update(BOTS)

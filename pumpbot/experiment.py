@@ -216,7 +216,7 @@ async def run(
     base = _base_config()
     tactics = {**TACTICS, **(extra or {})}
     os.makedirs(out_dir, exist_ok=True)
-    mux = FeedMux(base.ws_endpoint, record)
+    mux = FeedMux(base, record)
     socials = SocialsChecker(base.ipfs_gateways)
     market = MarketData(base, recorder=mux.record_extra if record else None)
     _build(mux, names, tactics, base, out_dir, socials, market=market)

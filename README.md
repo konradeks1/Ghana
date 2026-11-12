@@ -193,7 +193,17 @@ cp .env.example .env            # then edit .env
 python -m pumpbot
 ```
 
-### Required: PumpPortal API key
+### Live data: free by default
+- **Default, `DATA_SOURCE=solana`:** the bot reads Pump.fun and PumpSwap trades
+  directly from Solana's program logs (`pumpbot/solfeed.py`). This needs no
+  API key and has no fees. The public RPC works; your own `SOLANA_WS_URL`
+  (for example Helius) is faster and more reliable.
+- **Optional, PumpPortal:** set `DATA_SOURCE=pumpportal` to use PumpPortal's
+  stream instead, as described below.
+- **Live trading still uses PumpPortal:** its transaction builder sends real
+  orders in both cases.
+
+### PumpPortal API key (only for `DATA_SOURCE=pumpportal`)
 PumpPortal streams **trade** data only when you connect with an API key
 funded with **at least 0.02 SOL**. Without one, the bot gets new-coin events
 but can't see any trades (it warns you at startup). Create a key at
