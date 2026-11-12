@@ -163,4 +163,10 @@ BOTS: dict[str, dict] = {
     "bot2_breakout": dict(TACTICS["est_breakout"]),  # established $25k+ coins at a fresh high
     "bot3_volume": dict(TACTICS["volume_hunter"]),  # new coins with the most trading
 }
+# Version 2 (strategy search on 4 recordings, checked on an unseen 30-min run;
+# both lost less than version 1 on the unseen run, neither was profitable)
+BOTS["bot1_sniper"].update(scalp_min_age_sec=10, scalp_min_trades=10, stop_loss_pct=20, scalp_max_hold_sec=300,
+                           scalp_min_buy_ratio=0.55, any_profit_arm_pct=15, trailing_stop_pct=15)
+BOTS["bot2_breakout"].update(stop_loss_pct=10, scalp_fade_sell_ratio=0.9, scalp_require_new_high=False,
+                             scalp_min_trades=25, any_profit_arm_pct=3, trailing_stop_pct=10)
 TACTICS.update(BOTS)
